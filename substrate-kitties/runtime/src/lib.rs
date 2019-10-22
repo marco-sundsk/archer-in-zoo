@@ -264,6 +264,7 @@ impl kitties::Trait for Runtime {
 impl auction::Trait for Runtime {
 	type Event = Event;
 	type ItemId = u32;
+	type AuctionId = u32;
 	type Currency = Balances;
 	type Time = Timestamp;
 	type OnAuctionPayment = ();

@@ -23,6 +23,13 @@ pub trait Trait: system::Trait {
 		+ Default
 		+ Copy;
 
+	type AuctionId: Parameter
+		+ Member
+		+ SimpleArithmetic
+		+ Bounded
+		+ Default
+		+ Copy;
+
 	/// Currency type for this module.
 	type Currency: LockableCurrency<Self::AccountId>;
 
