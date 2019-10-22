@@ -42,8 +42,38 @@ impl system::Trait for Test {
   type AvailableBlockRatio = AvailableBlockRatio;
   type Version = ();
 }
+
+parameter_types! {
+	pub const MinimumPeriod: u64 = 5;
+}
+impl timestamp::Trait for Test {
+	type Moment = u64;
+	type OnTimestampSet = ();
+	type MinimumPeriod = MinimumPeriod;
+}
+
+parameter_types! {
+	pub const TransferFee: Balance = 0;
+	pub const CreationFee: Balance = 0;
+}
+impl balances::Trait for Test {
+	type Balance = Balance;
+	type OnFreeBalanceZero = Staking;
+	type OnNewAccount = ();
+	type Event = ();
+	type TransferPayment = ();
+	type DustRemoval = ();
+	type ExistentialDeposit = ExistentialDeposit;
+	type TransferFee = TransferFee;
+	type CreationFee = CreationFee;
+}
+
 impl Trait for Test {
   type Event = ();
+  type ItemId = u32;
+  type Currency = balances::Module<Self>;
+	type Time = timestamp::Module<Self>;
+  type OnAuctionPayment = ();
 }
 pub type TheModule = Module<Test>;
 
