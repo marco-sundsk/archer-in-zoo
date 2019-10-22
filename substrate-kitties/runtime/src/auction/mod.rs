@@ -9,7 +9,7 @@ use support::{
 		LockableCurrency, Currency,
 		Time, OnUnbalanced,
 	},
-	StorageValue, Parameter,
+	Parameter,
 	dispatch::Result
 };
 use system::ensure_signed;
