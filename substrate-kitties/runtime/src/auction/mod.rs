@@ -45,6 +45,11 @@ pub trait Trait: system::Trait {
 	// TODO more fee constant for auction
 	// type AuctionBaseFee: Get<BalanceOf<Self>>;
 }
+pub struct Product{
+	pub name :String,//拍卖品名称
+	pub category :String,//拍卖品类型
+	pub description :String,//拍卖品描述
+}
 
 pub type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
 type NegativeImbalanceOf<T> =
@@ -54,6 +59,18 @@ type NegativeImbalanceOf<T> =
 decl_storage! {
 	trait Store for Module<T: Trait> as Auction {
 		Something get(something): Option<u32>;
+                ///拍卖物
+		pub AuctionProduct get(auction_product): map T::ItemId => Option<Product>;
+		///起拍价
+		pub StartPrices get(start_prices): map T::ItemId => Option<BalanceOf<T>>;
+		///竞价增量
+		pub Increment get(increment): map T::ItemId => T::ItemId;
+		///拍卖品状态（0:未开拍，1:拍卖中，2:拍卖结束）
+		pub Status get(status): map T::ItemId => u8;
+		///最新竞价交易对应的区块高度
+		pub BlockNumberTx get(): map T::ItemId => T::ItemId;
+		///当前拍卖品归属人（中标人）
+		pub ProductOwners get(kitty_owner): map T::ItemId => Option<T::AccountId>;
 	}
 }
 
