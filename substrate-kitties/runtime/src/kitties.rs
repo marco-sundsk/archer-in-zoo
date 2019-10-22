@@ -8,6 +8,7 @@ use runtime_io::blake2_128;
 use system::ensure_signed;
 use rstd::result;
 use crate::linked_item::{LinkedList, LinkedItem};
+use crate::traits::ItemTransfer;
 
 pub trait Trait: system::Trait {
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
@@ -99,11 +100,7 @@ decl_module! {
  		pub fn transfer(origin, to: T::AccountId, kitty_id: T::KittyIndex) {
  			let sender = ensure_signed(origin)?;
 
-  			ensure!(<OwnedKitties<T>>::exists(&(sender.clone(), Some(kitty_id))), "Only owner can transfer kitty");
-
-			Self::do_transfer(&sender, &to, kitty_id);
-
-			Self::deposit_event(RawEvent::Transferred(sender, to, kitty_id));
+			Self::transfer_kitty(&sender, &to, kitty_id)?;
 		}
 
 		/// Set a price for a kitty for sale
@@ -177,6 +174,15 @@ impl<T: Trait> Module<T> {
 		Self::insert_owned_kitty(owner, kitty_id);
 	}
 
+	fn transfer_kitty(owner: &T::AccountId, to: &T::AccountId, kitty_id: T::KittyIndex) -> result::Result<(), &'static str> {
+		ensure!(<OwnedKitties<T>>::exists(&(owner.clone(), Some(kitty_id))), "Only owner can transfer kitty");
+
+		Self::do_transfer(owner, to, kitty_id);
+		Self::deposit_event(RawEvent::Transferred(owner.clone(), to.clone(), kitty_id));
+
+		Ok(())
+	}
+
 	fn do_breed(sender: &T::AccountId, kitty_id_1: T::KittyIndex, kitty_id_2: T::KittyIndex) -> result::Result<T::KittyIndex, &'static str> {
 		let kitty1 = Self::kitty(kitty_id_1);
 		let kitty2 = Self::kitty(kitty_id_2);
@@ -211,6 +217,12 @@ impl<T: Trait> Module<T> {
  		<OwnedKittiesList<T>>::append(&to, kitty_id);
  		<KittyOwners<T>>::insert(kitty_id, to);
  	}
+}
+
+impl<T: Trait> ItemTransfer<<T as system::Trait>::AccountId, T::KittyIndex> for Module<T> {
+	fn transfer_item(source: &<T as system::Trait>::AccountId, dest: &<T as system::Trait>::AccountId, item_id: T::KittyIndex) -> result::Result<(), &'static str> {
+		Module::<T>::transfer_kitty(source, dest, item_id)
+	}
 }
 
 /// Tests for Kitties module

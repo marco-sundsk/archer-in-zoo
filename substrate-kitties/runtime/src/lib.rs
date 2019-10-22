@@ -61,6 +61,9 @@ pub type Hash = primitives::H256;
 /// Digest item type.
 pub type DigestItem = generic::DigestItem<Hash>;
 
+/// general traits
+mod traits;
+
 mod linked_item;
 /// Used for the module kitties in `./kitties.rs`
 mod kitties;
@@ -268,6 +271,7 @@ impl auction::Trait for Runtime {
 	type Currency = Balances;
 	type Time = Timestamp;
 	type OnAuctionPayment = ();
+	type AuctionTransfer = Kitties;
 }
 
 construct_runtime!(
