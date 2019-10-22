@@ -71,6 +71,7 @@ impl balances::Trait for Test {
 impl Trait for Test {
   type Event = ();
   type ItemId = u32;
+  type AuctionId = u32;
   type Currency = balances::Module<Self>;
 	type Time = timestamp::Module<Self>;
   type OnAuctionPayment = ();
