@@ -75,6 +75,7 @@ pub enum AuctionStatus {
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Auction<T> where T: Trait {
     id: T::AuctionId,
+	item: T::ItemId, // 拍卖物品id
 	owner: T::AccountId, // 拍卖管理账户，可以控制暂停和继续
     start_at: T::Moment, // 自动开始时间
 	stop_at: T::Moment, // 截止时间
@@ -90,6 +91,9 @@ pub struct Auction<T> where T: Trait {
 decl_storage! {
 	trait Store for Module<T: Trait> as Auction {
 		NextAuctionId get(next_auction_id): T::AuctionId;
+		
+		// 物品id映射auctionid，一个物品只能在一个auction中参拍，创建auction后添加映射，auction结束后删除映射
+		AuctionItems get(auction_items): map T::ItemId => Option<T::AuctionId>;
 		Auctions get(auctions): map T::AuctionId => Option<Auction<T>>;
 		AuctionBids get(auction_bids): double_map T::AuctionId, twox_128(T::AccountId) => Option<BalanceOf<T>>;
 		AuctionParticipants get(action_participants): map T::AuctionId => Option<Vec<T::AccountId>>;
