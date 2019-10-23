@@ -65,7 +65,7 @@ type NegativeImbalanceOf<T> =
 #[derive(Encode, Decode, Clone, Copy, Eq, PartialEq)]
 #[cfg_attr(feature = "std", derive(Debug))]
 pub enum AuctionStatus {
-    PendingStart,
+  PendingStart,
 	Paused,
 	Active,
 	Stopped,
@@ -74,7 +74,7 @@ pub enum AuctionStatus {
 #[derive(Encode, Decode, Clone, PartialEq, Copy)]
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Auction<T> where T: Trait {
-    id: T::AuctionId,
+  id: T::AuctionId,
 	item: T::ItemId, // 拍卖物品id
 	owner: T::AccountId, // 拍卖管理账户，可以控制暂停和继续
     start_at: Option<T::Moment>, // 自动开始时间
@@ -125,7 +125,7 @@ decl_module! {
 		fn deposit_event() = default;
 
 		pub fn create_auction(origin,
-			item: T::ItemId,//竞拍对象
+			// item: T::ItemId,//竞拍对象
 			begin_price: BalanceOf<T>,//起拍价
 			minimum_step: BalanceOf<T>,//最小加价幅度
 			upper_bound_price: Option<BalanceOf<T>>,//封顶价
@@ -133,6 +133,9 @@ decl_module! {
 			// stop_at: T::Moment,//结束时间
 			// wait_period: T::Moment //竞价等待时间
 			) -> Result {
+			let sender = ensure_signed(origin)?;
+
+			let new_auction_id = Self::do_create_auction(&sender, begin_price,minimum_step,upper_bound_price)?;
 			Ok(())
 		}
 
@@ -181,8 +184,40 @@ decl_module! {
 // );
 
 impl<T: Trait> Module<T> {
-	fn do_create_auction(owner: T::AccountId, item: T::ItemId) -> result::Result<T::AuctionId, &'static str> {
-		Ok(T::AuctionId::zero())
+	fn get_next_auction_id() -> result::Result<T::AuctionId, &'static str> {
+		let auction_id = Self::next_auction_id();
+		if auction_id == T::AuctionId::max_value() {
+			return Err("Auction count overflow");
+		}
+		Ok(auction_id)
+	}
+	fn insert_auction(owner: &T::AccountId, auction_id: T::AuctionId, auction:Auction<T>) {
+		// Create and store kitty
+		<Auctions<T>>::insert(auction_id, auction);
+		<NextAuctionId<T>>::put(auction_id + 1.into());
+	}
+	fn do_create_auction(
+			owner: &T::AccountId, 
+			begin_price: BalanceOf<T>,//起拍价
+			minimum_step: BalanceOf<T>,//最小加价幅度
+			upper_bound_price: Option<BalanceOf<T>>) -> result::Result<T::AuctionId, &'static str> {
+				// 判断id
+				let auction_id = Self::get_next_auction_id()?;
+				let new_auction = Auction {
+						id: auction_id,
+						item: 0.into(), // 拍卖物品id
+						owner: (*owner).clone(), // 拍卖管理账户，可以控制暂停和继续
+						begin_price: begin_price, // 起拍价
+						minimum_step: minimum_step, // 最小加价幅度
+						status: AuctionStatus::PendingStart,
+						upper_bound_price:upper_bound_price,
+						start_at: None,
+						stop_at:None,
+						wait_period: None,
+						latest_participate_time: None,
+				};
+				Self::insert_auction(owner, auction_id, new_auction);
+				Ok(auction_id)
 	}
 
 	fn do_enable_auction(auction: T::AuctionId) -> Result {
