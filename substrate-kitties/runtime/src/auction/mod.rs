@@ -9,10 +9,11 @@ use support::{
 		LockableCurrency, Currency,
 		Time, OnUnbalanced,
 	},
-	StorageValue, Parameter,
+	Parameter,
 	dispatch::Result
 };
 use system::ensure_signed;
+use crate::traits::ItemTransfer;
 
 /// The module's configuration trait.
 pub trait Trait: system::Trait {
@@ -41,6 +42,9 @@ pub trait Trait: system::Trait {
 
 	/// Handler for the unbalanced reduction when taking a auction fee.
 	type OnAuctionPayment: OnUnbalanced<NegativeImbalanceOf<Self>>;
+	
+	/// Interface for transfer item
+	type AuctionTransfer: ItemTransfer<Self::AccountId, Self::ItemId>;
 
 	// TODO more fee constant for auction
 	// type AuctionBaseFee: Get<BalanceOf<Self>>;
@@ -81,18 +85,63 @@ decl_module! {
 		// Initializing events
 		fn deposit_event() = default;
 
-		pub fn do_something(origin, something: u32) -> Result {
-			// TODO: You only need this if you want to check it was signed.
-			let who = ensure_signed(origin)?;
-
-			// TODO: Code to execute when something calls this.
-			// For example: the following line stores the passed in u32 in the storage
-			Something::put(something);
-
-			// here we are raising the Something event
-			Self::deposit_event(RawEvent::SomethingStored(something, who));
+		pub fn create_auction(origin, item: ItemId, start_at: Time, stop_at: Time ) -> Result {
 			Ok(())
 		}
+
+		pub fn pause_auction(origin, auction: AuctionId) -> Result {
+			Ok(())
+		}
+
+		pub fn resume_auction(origin, auction: AuctionId) -> Result {
+			Ok(())
+		}
+
+		pub fn start_auction(
+			origin,
+			auction: AuctionId,
+			signature: <T::AuthorityId as RuntimeAppPublic>::Signature
+		) -> Result { // Called by offchain worker
+			Ok(())
+		}
+
+		pub fn stop_auction(
+			origin,
+			auction: AuctionId,
+			signature: <T::AuthorityId as RuntimeAppPublic>::Signature
+		) -> Result { // Called by offchain worker
+			Ok(())
+		}
+
+		pub fn participate_auction(
+			origin,
+			auction: AuctionId,
+			price: BalanceOf<T>
+		) -> Result {
+			Ok(())
+		}
+
+		// Runs after every block.
+		fn offchain_worker(now: T::BlockNumber) {
+		}
+	}
+}
+
+impl<T: Trait> Module<T> {
+	fn do_create_auction(owner: T::AccountId, item: ItemId, start_at: Time, stop_at: Time) -> result::Result<T::AuctionId, &'static str> {
+		Ok(())
+	}
+
+	fn do_enable_auction(auction: AuctionId) -> Result {
+		Ok(())
+	}
+
+	fn do_disable_auction(auction: AuctionId) -> Result {
+		Ok(())
+	}
+
+	fn do_settle_auction(auction: AuctionId) -> Result {
+		Ok(())
 	}
 }
 

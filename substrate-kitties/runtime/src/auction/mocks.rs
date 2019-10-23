@@ -3,11 +3,11 @@
 
 use super::*;
 
-use primitives::{H256, Blake2Hasher};
+use primitives::H256;
 use support::{impl_outer_origin, assert_ok, parameter_types};
-use sr_primitives::{traits::{BlakeTwo256, IdentityLookup}, testing::Header};
-use sr_primitives::weights::Weight;
-use sr_primitives::Perbill;
+use sr_primitives::{
+  traits::{BlakeTwo256, IdentityLookup}, testing::Header, weights::Weight, Perbill,
+};
 
 impl_outer_origin! {
   pub enum Origin for Test {}
@@ -34,7 +34,6 @@ impl system::Trait for Test {
   type AccountId = u64;
   type Lookup = IdentityLookup<Self::AccountId>;
   type Header = Header;
-  type WeightMultiplierUpdate = ();
   type Event = ();
   type BlockHashCount = BlockHashCount;
   type MaximumBlockWeight = MaximumBlockWeight;
@@ -78,8 +77,8 @@ impl Trait for Test {
 }
 pub type TheModule = Module<Test>;
 
-// This function basically just builds a genesis storage key/value store according to
-// our desired mockup.
-pub fn new_test_ext() -> runtime_io::TestExternalities<Blake2Hasher> {
-  system::GenesisConfig::default().build_storage::<Test>().unwrap().into()
-}
+	// This function basically just builds a genesis storage key/value store according to
+	// our desired mockup.
+	fn new_test_ext() -> runtime_io::TestExternalities {
+		system::GenesisConfig::default().build_storage::<Test>().unwrap().into()
+	}

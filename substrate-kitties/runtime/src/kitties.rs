@@ -1,13 +1,17 @@
 use support::{
-	decl_module, decl_storage, decl_event, ensure, StorageValue, StorageMap,
-	Parameter, traits::Currency
+	decl_module, decl_storage, decl_event, ensure,
+	Parameter,
+	traits::{
+		Currency, Randomness
+	}
 };
 use sr_primitives::traits::{SimpleArithmetic, Bounded, Member};
-use codec::{Encode, Decode, Output, Input};
+use codec::{Encode, Decode, EncodeLike, Output, Input};
 use runtime_io::blake2_128;
 use system::ensure_signed;
 use rstd::result;
 use crate::linked_item::{LinkedList, LinkedItem};
+use crate::traits::ItemTransfer;
 
 pub trait Trait: system::Trait {
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
@@ -24,6 +28,7 @@ impl Encode for Kitty {
 		output.push(&self.0);
 	}
 }
+impl EncodeLike for Kitty {}
 
 impl Decode for Kitty {
 	fn decode<I: Input>(input: &mut I) -> Result<Self, codec::Error> {
@@ -99,11 +104,7 @@ decl_module! {
  		pub fn transfer(origin, to: T::AccountId, kitty_id: T::KittyIndex) {
  			let sender = ensure_signed(origin)?;
 
-  			ensure!(<OwnedKitties<T>>::exists(&(sender.clone(), Some(kitty_id))), "Only owner can transfer kitty");
-
-			Self::do_transfer(&sender, &to, kitty_id);
-
-			Self::deposit_event(RawEvent::Transferred(sender, to, kitty_id));
+			Self::transfer_kitty(&sender, &to, kitty_id)?;
 		}
 
 		/// Set a price for a kitty for sale
@@ -152,7 +153,7 @@ fn combine_dna(dna1: u8, dna2: u8, selector: u8) -> u8 {
 
 impl<T: Trait> Module<T> {
 	fn random_value(sender: &T::AccountId) -> [u8; 16] {
-		let payload = (<system::Module<T>>::random_seed(), sender, <system::Module<T>>::extrinsic_index(), <system::Module<T>>::block_number());
+		let payload = (<randomness_collective_flip::Module<T>>::random_seed(), sender, <system::Module<T>>::extrinsic_index(), <system::Module<T>>::block_number());
 		payload.using_encoded(blake2_128)
 	}
 
@@ -175,6 +176,15 @@ impl<T: Trait> Module<T> {
 		<KittyOwners<T>>::insert(kitty_id, owner.clone());
 
 		Self::insert_owned_kitty(owner, kitty_id);
+	}
+
+	fn transfer_kitty(owner: &T::AccountId, to: &T::AccountId, kitty_id: T::KittyIndex) -> result::Result<(), &'static str> {
+		ensure!(<OwnedKitties<T>>::exists(&(owner.clone(), Some(kitty_id))), "Only owner can transfer kitty");
+
+		Self::do_transfer(owner, to, kitty_id);
+		Self::deposit_event(RawEvent::Transferred(owner.clone(), to.clone(), kitty_id));
+
+		Ok(())
 	}
 
 	fn do_breed(sender: &T::AccountId, kitty_id_1: T::KittyIndex, kitty_id_2: T::KittyIndex) -> result::Result<T::KittyIndex, &'static str> {
@@ -213,13 +223,18 @@ impl<T: Trait> Module<T> {
  	}
 }
 
+impl<T: Trait> ItemTransfer<<T as system::Trait>::AccountId, T::KittyIndex> for Module<T> {
+	fn transfer_item(source: &<T as system::Trait>::AccountId, dest: &<T as system::Trait>::AccountId, item_id: T::KittyIndex) -> result::Result<(), &'static str> {
+		Module::<T>::transfer_kitty(source, dest, item_id)
+	}
+}
+
 /// Tests for Kitties module
 #[cfg(test)]
 mod tests {
 	use super::*;
 
-	use runtime_io::with_externalities;
-	use primitives::{H256, Blake2Hasher};
+	use primitives::{H256};
 	use support::{impl_outer_origin, parameter_types};
 	use sr_primitives::{traits::{BlakeTwo256, IdentityLookup}, testing::Header};
 	use sr_primitives::weights::Weight;
@@ -250,7 +265,6 @@ mod tests {
 		type AccountId = u64;
 		type Lookup = IdentityLookup<Self::AccountId>;
 		type Header = Header;
-		type WeightMultiplierUpdate = ();
 		type Event = ();
 		type BlockHashCount = BlockHashCount;
 		type MaximumBlockWeight = MaximumBlockWeight;
@@ -270,15 +284,11 @@ mod tests {
 		type OnFreeBalanceZero = ();
 		type OnNewAccount = ();
 		type Event = ();
-		type TransactionPayment = ();
 		type TransferPayment = ();
 		type DustRemoval = ();
 		type ExistentialDeposit = ExistentialDeposit;
 		type TransferFee = TransferFee;
 		type CreationFee = CreationFee;
-		type TransactionBaseFee = TransactionBaseFee;
-		type TransactionByteFee = TransactionByteFee;
-		type WeightToFee = ();
 	}
 	impl Trait for Test {
 		type KittyIndex = u32;
@@ -289,13 +299,13 @@ mod tests {
 
 	// This function basically just builds a genesis storage key/value store according to
 	// our desired mockup.
-	fn new_test_ext() -> runtime_io::TestExternalities<Blake2Hasher> {
+	fn new_test_ext() -> runtime_io::TestExternalities {
 		system::GenesisConfig::default().build_storage::<Test>().unwrap().into()
 	}
 
 	#[test]
 	fn owned_kitties_can_append_values() {
-		with_externalities(&mut new_test_ext(), || {
+		new_test_ext().execute_with(|| {
 			OwnedKittiesList::<Test>::append(&0, 1);
 
 			assert_eq!(OwnedKittiesTest::get(&(0, None)), Some(KittyLinkedItem::<Test> {
@@ -351,7 +361,7 @@ mod tests {
 
 	#[test]
 	fn owned_kitties_can_remove_values() {
-		with_externalities(&mut new_test_ext(), || {
+		new_test_ext().execute_with(|| {
 			OwnedKittiesList::<Test>::append(&0, 1);
 			OwnedKittiesList::<Test>::append(&0, 2);
 			OwnedKittiesList::<Test>::append(&0, 3);
