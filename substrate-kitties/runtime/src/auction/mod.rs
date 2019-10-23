@@ -68,12 +68,27 @@ decl_storage! {
 	}
 }
 
+// add by sunhao 20191023
+decl_event!(
+	pub enum Event<T> where
+		<T as system::Trait>::AccountId,
+		<T as Trait>::AuctionId,
+		Balance = BalanceOf<T>,
+	{
+		/// A price and/or amount is changed in some auction. 
+		/// (auction_id, latest_bidder, latest_price, remain_amount)
+		BidderUpdated(AuctionId, AccountId, Balance, u32),
+		/// A auction's status has changed. (auction_id, status_from, status_to)
+		AuctionUpdated(AuctionId, u32, u32),
+	}
+);
+
 // The module's dispatchable functions.
 decl_module! {
 	/// The module declaration.
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 		// Initializing events
-		// fn deposit_event() = default;
+		fn deposit_event() = default;
 
 		pub fn create_auction(origin, item: T::ItemId, start_at: T::Moment, stop_at: T::Moment) -> Result {
 			Ok(())
@@ -116,11 +131,12 @@ decl_module! {
 	}
 }
 
-decl_event!(
-	pub enum Event<T> where AccountId = <T as system::Trait>::AccountId {
-		SomethingStored(u32, AccountId),
-	}
-);
+
+// decl_event!(
+// 	pub enum Event<T> where AccountId = <T as system::Trait>::AccountId {
+// 		SomethingStored(u32, AccountId),
+// 	}
+// );
 
 impl<T: Trait> Module<T> {
 	fn do_create_auction(owner: T::AccountId, item: T::ItemId, start_at: T::Moment, stop_at: T::Moment) -> result::Result<T::AuctionId, &'static str> {
