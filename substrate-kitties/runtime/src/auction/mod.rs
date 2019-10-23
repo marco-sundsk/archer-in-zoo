@@ -1,22 +1,31 @@
+use sr_primitives::{RuntimeAppPublic};
 use sr_primitives::traits::{
 	SimpleArithmetic, Member, One, Zero,
 	CheckedAdd, CheckedSub,
 	Saturating, Bounded, SaturatedConversion,
 };
+use rstd::result;
+use support::dispatch::Result;
 use support::{
-	decl_module, decl_storage, decl_event,
+	decl_module, decl_storage, decl_event, Parameter,
 	traits::{
 		LockableCurrency, Currency,
-		Time, OnUnbalanced,
-	},
-	Parameter,
-	dispatch::Result
+		OnUnbalanced,
+	}
 };
 use system::ensure_signed;
+
 use crate::traits::ItemTransfer;
 
 /// The module's configuration trait.
-pub trait Trait: system::Trait {
+pub trait Trait: timestamp::Trait {
+	/// The identifier type for an authority.
+	type AuthorityId: Parameter
+		+ Member
+		+ RuntimeAppPublic
+		+ Default;
+
+	/// Item Id
 	type ItemId: Parameter
 		+ Member
 		+ SimpleArithmetic
@@ -24,6 +33,7 @@ pub trait Trait: system::Trait {
 		+ Default
 		+ Copy;
 
+	/// Auction Id
 	type AuctionId: Parameter
 		+ Member
 		+ SimpleArithmetic
@@ -33,9 +43,6 @@ pub trait Trait: system::Trait {
 
 	/// Currency type for this module.
 	type Currency: LockableCurrency<Self::AccountId>;
-
-	/// Time used for computing auction.
-	type Time: Time;
 
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
@@ -83,23 +90,23 @@ decl_module! {
 	/// The module declaration.
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 		// Initializing events
-		fn deposit_event() = default;
+		// fn deposit_event() = default;
 
-		pub fn create_auction(origin, item: ItemId, start_at: Time, stop_at: Time ) -> Result {
+		pub fn create_auction(origin, item: T::ItemId, start_at: T::Moment, stop_at: T::Moment) -> Result {
 			Ok(())
 		}
 
-		pub fn pause_auction(origin, auction: AuctionId) -> Result {
+		pub fn pause_auction(origin, auction: T::AuctionId) -> Result {
 			Ok(())
 		}
 
-		pub fn resume_auction(origin, auction: AuctionId) -> Result {
+		pub fn resume_auction(origin, auction: T::AuctionId) -> Result {
 			Ok(())
 		}
 
 		pub fn start_auction(
 			origin,
-			auction: AuctionId,
+			auction: T::AuctionId,
 			signature: <T::AuthorityId as RuntimeAppPublic>::Signature
 		) -> Result { // Called by offchain worker
 			Ok(())
@@ -107,7 +114,7 @@ decl_module! {
 
 		pub fn stop_auction(
 			origin,
-			auction: AuctionId,
+			auction: T::AuctionId,
 			signature: <T::AuthorityId as RuntimeAppPublic>::Signature
 		) -> Result { // Called by offchain worker
 			Ok(())
@@ -115,33 +122,14 @@ decl_module! {
 
 		pub fn participate_auction(
 			origin,
-			auction: AuctionId,
+			auction: T::AuctionId,
 			price: BalanceOf<T>
 		) -> Result {
 			Ok(())
 		}
 
-		// Runs after every block.
-		fn offchain_worker(now: T::BlockNumber) {
+		fn offchain_worker(now: <T as system::Trait>::BlockNumber) {
 		}
-	}
-}
-
-impl<T: Trait> Module<T> {
-	fn do_create_auction(owner: T::AccountId, item: ItemId, start_at: Time, stop_at: Time) -> result::Result<T::AuctionId, &'static str> {
-		Ok(())
-	}
-
-	fn do_enable_auction(auction: AuctionId) -> Result {
-		Ok(())
-	}
-
-	fn do_disable_auction(auction: AuctionId) -> Result {
-		Ok(())
-	}
-
-	fn do_settle_auction(auction: AuctionId) -> Result {
-		Ok(())
 	}
 }
 
@@ -150,3 +138,21 @@ decl_event!(
 		SomethingStored(u32, AccountId),
 	}
 );
+
+impl<T: Trait> Module<T> {
+	fn do_create_auction(owner: T::AccountId, item: T::ItemId, start_at: T::Moment, stop_at: T::Moment) -> result::Result<T::AuctionId, &'static str> {
+		Ok(T::AuctionId::zero())
+	}
+
+	fn do_enable_auction(auction: T::AuctionId) -> Result {
+		Ok(())
+	}
+
+	fn do_disable_auction(auction: T::AuctionId) -> Result {
+		Ok(())
+	}
+
+	fn do_settle_auction(auction: T::AuctionId) -> Result {
+		Ok(())
+	}
+}
