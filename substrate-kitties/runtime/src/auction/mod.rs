@@ -9,10 +9,11 @@ use support::{
 		LockableCurrency, Currency,
 		Time, OnUnbalanced,
 	},
-	StorageValue, Parameter,
+	Parameter,
 	dispatch::Result
 };
 use system::ensure_signed;
+use crate::traits::ItemTransfer;
 
 /// The module's configuration trait.
 pub trait Trait: system::Trait {
@@ -41,6 +42,9 @@ pub trait Trait: system::Trait {
 
 	/// Handler for the unbalanced reduction when taking a auction fee.
 	type OnAuctionPayment: OnUnbalanced<NegativeImbalanceOf<Self>>;
+	
+	/// Interface for transfer item
+	type AuctionTransfer: ItemTransfer<Self::AccountId, Self::ItemId>;
 
 	// TODO more fee constant for auction
 	// type AuctionBaseFee: Get<BalanceOf<Self>>;
