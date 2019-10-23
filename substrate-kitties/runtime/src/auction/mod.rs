@@ -7,7 +7,7 @@ use sr_primitives::traits::{
 use rstd::result;
 use support::dispatch::Result;
 use support::{
-	decl_module, decl_storage, decl_event, Parameter,
+	decl_module, decl_storage, decl_event, Parameter, ensure,
 	traits::{
 		LockableCurrency, Currency,
 		OnUnbalanced,
@@ -137,6 +137,40 @@ decl_module! {
 
 			Self::do_create_auction(&sender, begin_price,minimum_step, upper_bound_price)?;
 
+			Ok(())
+		}
+
+		// setup start and/or stop Moment, and wait_period after someone's bid
+		// add by sunhao 20191023
+		pub fn setup_moments(origin,
+			auction_id: T::AuctionId, 
+			start_at: Option<T::Moment>,  //起拍时间
+			stop_at: Option<T::Moment>,  //结束时间
+			wait_period: Option<T::Moment>  //竞价等待时间
+		) -> Result {
+			let sender = ensure_signed(origin)?;
+
+			// unwrap auction and ensure its status is PendingStart
+			let auction = Self::auctions(auction_id);
+			ensure!(auction.is_some(), "Auction does not exist");
+			let mut auction = auction.unwrap();
+			ensure!(auction.status == AuctionStatus::PendingStart, 
+				"Auction is already started or over.");
+			
+			// ensure only owner can call this
+			ensure!(auction.owner == sender, "Only owner can call this fn.");
+
+			// set moments into storage
+			if start_at.is_some() {
+				auction.start_at = start_at;
+			}
+			if stop_at.is_some() {
+				auction.stop_at = stop_at;
+			}
+			if wait_period.is_some() {
+				auction.wait_period = wait_period;
+			}
+				
 			Ok(())
 		}
 
