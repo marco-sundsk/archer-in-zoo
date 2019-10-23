@@ -5,6 +5,7 @@ use super::*;
 
 use primitives::H256;
 use support::{impl_outer_origin, assert_ok, parameter_types};
+use sr_primitives::testing::{UintAuthorityId};
 use sr_primitives::{
   traits::{BlakeTwo256, IdentityLookup}, testing::Header, weights::Weight, Perbill,
 };
@@ -69,11 +70,11 @@ impl balances::Trait for Test {
 
 impl Trait for Test {
   type Event = ();
+	type AuthorityId = UintAuthorityId;
   type ItemId = u32;
   type AuctionId = u32;
   type Currency = balances::Module<Self>;
-	type Time = timestamp::Module<Self>;
-  type OnAuctionPayment = ();
+	type OnAuctionPayment = ();
 }
 pub type TheModule = Module<Test>;
 
