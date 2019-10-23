@@ -24,7 +24,7 @@
   },
   "Auction": {
     "id": "AuctionId",
-    "item": "KittyIndex",
+    "item": "ItemId",
     "owner": "AccountId",
     "start_at": "Option<Moment>",
     "stop_at": "Option<Moment>",
