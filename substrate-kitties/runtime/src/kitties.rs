@@ -1,10 +1,5 @@
-use support::{
-	decl_module, decl_storage, decl_event, ensure,
-	Parameter,
-	traits::{
-		Currency, Randomness
-	}
-};
+use support::{decl_module, decl_storage, decl_event, ensure,Parameter};
+use support::traits::{Randomness};
 use sr_primitives::traits::{SimpleArithmetic, Bounded, Member};
 use codec::{Encode, Decode, EncodeLike, Output, Input};
 use runtime_io::blake2_128;
@@ -16,10 +11,7 @@ use crate::traits::ItemTransfer;
 pub trait Trait: system::Trait {
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 	type KittyIndex: Parameter + Member + SimpleArithmetic + Bounded + Default + Copy;
-	type Currency: Currency<Self::AccountId>;
 }
-
-type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
 
 pub struct Kitty(pub [u8; 16]);
 
@@ -50,8 +42,6 @@ decl_storage! {
 
 		/// Get kitty owner
 		pub KittyOwners get(kitty_owner): map T::KittyIndex => Option<T::AccountId>;
-		/// Get kitty price. None means not for sale.
-		pub KittyPrices get(kitty_price): map T::KittyIndex => Option<BalanceOf<T>>
 	}
 }
 
@@ -59,16 +49,11 @@ decl_event!(
 	pub enum Event<T> where
 		<T as system::Trait>::AccountId,
 		<T as Trait>::KittyIndex,
-		Balance = BalanceOf<T>,
 	{
 		/// A kitty is created. (owner, kitty_id)
 		Created(AccountId, KittyIndex),
 		/// A kitty is transferred. (from, to, kitty_id)
 		Transferred(AccountId, AccountId, KittyIndex),
-		/// A kitty is available for sale. (owner, kitty_id, price)
-		Ask(AccountId, KittyIndex, Option<Balance>),
-		/// A kitty is sold. (from, to, kitty_id, price)
-		Sold(AccountId, AccountId, KittyIndex, Balance),
 	}
 );
 
@@ -105,44 +90,6 @@ decl_module! {
  			let sender = ensure_signed(origin)?;
 
 			Self::transfer_kitty(&sender, &to, kitty_id)?;
-		}
-
-		/// Set a price for a kitty for sale
-		/// None to delist the kitty
-		pub fn ask(origin, kitty_id: T::KittyIndex, price: Option<BalanceOf<T>>) {
-			let sender = ensure_signed(origin)?;
-
-			ensure!(<OwnedKitties<T>>::exists(&(sender.clone(), Some(kitty_id))), "Only owner can set price for kitty");
-
-			if let Some(ref price) = price {
-				<KittyPrices<T>>::insert(kitty_id, price);
-			} else {
-				<KittyPrices<T>>::remove(kitty_id);
-			}
-
-			Self::deposit_event(RawEvent::Ask(sender, kitty_id, price));
-		}
-
-		pub fn buy(origin, kitty_id: T::KittyIndex, price: BalanceOf<T>) {
-			let sender = ensure_signed(origin)?;
-
-			let owner = Self::kitty_owner(kitty_id);
-			ensure!(owner.is_some(), "Kitty does not exist");
-			let owner = owner.unwrap();
-
-			let kitty_price = Self::kitty_price(kitty_id);
-			ensure!(kitty_price.is_some(), "Kitty not for sale");
-
-			let kitty_price = kitty_price.unwrap();
-			ensure!(price >= kitty_price, "Price is too low");
-
-			T::Currency::transfer(&sender, &owner, kitty_price)?;
-
-			<KittyPrices<T>>::remove(kitty_id);
-
-			Self::do_transfer(&owner, &sender, kitty_id);
-
-			Self::deposit_event(RawEvent::Sold(owner, sender, kitty_id, kitty_price));
 		}
 	}
 }
@@ -272,27 +219,8 @@ mod tests {
 		type AvailableBlockRatio = AvailableBlockRatio;
 		type Version = ();
 	}
-	parameter_types! {
-		pub const ExistentialDeposit: u64 = 0;
-		pub const TransferFee: u64 = 0;
-		pub const CreationFee: u64 = 0;
-		pub const TransactionBaseFee: u64 = 0;
-		pub const TransactionByteFee: u64 = 0;
-	}
-	impl balances::Trait for Test {
-		type Balance = u64;
-		type OnFreeBalanceZero = ();
-		type OnNewAccount = ();
-		type Event = ();
-		type TransferPayment = ();
-		type DustRemoval = ();
-		type ExistentialDeposit = ExistentialDeposit;
-		type TransferFee = TransferFee;
-		type CreationFee = CreationFee;
-	}
 	impl Trait for Test {
 		type KittyIndex = u32;
-		type Currency = balances::Module<Test>;
 		type Event = ();
 	}
 	type OwnedKittiesTest = OwnedKitties<Test>;
