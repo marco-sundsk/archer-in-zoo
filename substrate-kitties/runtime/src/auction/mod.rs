@@ -1,21 +1,31 @@
+use sr_primitives::{RuntimeAppPublic};
 use sr_primitives::traits::{
 	SimpleArithmetic, Member, One, Zero,
 	CheckedAdd, CheckedSub,
 	Saturating, Bounded, SaturatedConversion,
 };
+use rstd::result;
+use support::dispatch::Result;
 use support::{
-	decl_module, decl_storage, decl_event,
+	decl_module, decl_storage, decl_event, Parameter,
 	traits::{
 		LockableCurrency, Currency,
-		Time, OnUnbalanced,
-	},
-	StorageValue, Parameter,
-	dispatch::Result
+		OnUnbalanced,
+	}
 };
 use system::ensure_signed;
 
+use crate::traits::ItemTransfer;
+
 /// The module's configuration trait.
-pub trait Trait: system::Trait {
+pub trait Trait: timestamp::Trait {
+	/// The identifier type for an authority.
+	type AuthorityId: Parameter
+		+ Member
+		+ RuntimeAppPublic
+		+ Default;
+
+	/// Item Id
 	type ItemId: Parameter
 		+ Member
 		+ SimpleArithmetic
@@ -23,6 +33,7 @@ pub trait Trait: system::Trait {
 		+ Default
 		+ Copy;
 
+	/// Auction Id
 	type AuctionId: Parameter
 		+ Member
 		+ SimpleArithmetic
@@ -33,14 +44,14 @@ pub trait Trait: system::Trait {
 	/// Currency type for this module.
 	type Currency: LockableCurrency<Self::AccountId>;
 
-	/// Time used for computing auction.
-	type Time: Time;
-
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 
 	/// Handler for the unbalanced reduction when taking a auction fee.
 	type OnAuctionPayment: OnUnbalanced<NegativeImbalanceOf<Self>>;
+	
+	/// Interface for transfer item
+	type AuctionTransfer: ItemTransfer<Self::AccountId, Self::ItemId>;
 
 	// TODO more fee constant for auction
 	// type AuctionBaseFee: Get<BalanceOf<Self>>;
@@ -62,19 +73,45 @@ decl_module! {
 	/// The module declaration.
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 		// Initializing events
-		fn deposit_event() = default;
+		// fn deposit_event() = default;
 
-		pub fn do_something(origin, something: u32) -> Result {
-			// TODO: You only need this if you want to check it was signed.
-			let who = ensure_signed(origin)?;
-
-			// TODO: Code to execute when something calls this.
-			// For example: the following line stores the passed in u32 in the storage
-			Something::put(something);
-
-			// here we are raising the Something event
-			Self::deposit_event(RawEvent::SomethingStored(something, who));
+		pub fn create_auction(origin, item: T::ItemId, start_at: T::Moment, stop_at: T::Moment) -> Result {
 			Ok(())
+		}
+
+		pub fn pause_auction(origin, auction: T::AuctionId) -> Result {
+			Ok(())
+		}
+
+		pub fn resume_auction(origin, auction: T::AuctionId) -> Result {
+			Ok(())
+		}
+
+		pub fn start_auction(
+			origin,
+			auction: T::AuctionId,
+			signature: <T::AuthorityId as RuntimeAppPublic>::Signature
+		) -> Result { // Called by offchain worker
+			Ok(())
+		}
+
+		pub fn stop_auction(
+			origin,
+			auction: T::AuctionId,
+			signature: <T::AuthorityId as RuntimeAppPublic>::Signature
+		) -> Result { // Called by offchain worker
+			Ok(())
+		}
+
+		pub fn participate_auction(
+			origin,
+			auction: T::AuctionId,
+			price: BalanceOf<T>
+		) -> Result {
+			Ok(())
+		}
+
+		fn offchain_worker(now: <T as system::Trait>::BlockNumber) {
 		}
 	}
 }
@@ -84,3 +121,21 @@ decl_event!(
 		SomethingStored(u32, AccountId),
 	}
 );
+
+impl<T: Trait> Module<T> {
+	fn do_create_auction(owner: T::AccountId, item: T::ItemId, start_at: T::Moment, stop_at: T::Moment) -> result::Result<T::AuctionId, &'static str> {
+		Ok(T::AuctionId::zero())
+	}
+
+	fn do_enable_auction(auction: T::AuctionId) -> Result {
+		Ok(())
+	}
+
+	fn do_disable_auction(auction: T::AuctionId) -> Result {
+		Ok(())
+	}
+
+	fn do_settle_auction(auction: T::AuctionId) -> Result {
+		Ok(())
+	}
+}
