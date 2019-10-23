@@ -77,9 +77,9 @@ pub struct Auction<T> where T: Trait {
     id: T::AuctionId,
 	item: T::ItemId, // 拍卖物品id
 	owner: T::AccountId, // 拍卖管理账户，可以控制暂停和继续
-    start_at: T::Moment, // 自动开始时间
-	stop_at: T::Moment, // 截止时间
-	wait_period: T::Moment, // 等待时间
+    start_at: Option<T::Moment>, // 自动开始时间
+	stop_at: Option<T::Moment>, // 截止时间
+	wait_period: Option<T::Moment>, // 等待时间
 	begin_price: BalanceOf<T>, // 起拍价
 	upper_bound_price: Option<BalanceOf<T>>, // 封顶价（可选）
 	minimum_step: BalanceOf<T>, // 最小加价幅度
@@ -129,9 +129,9 @@ decl_module! {
 			begin_price: BalanceOf<T>,//起拍价
 			minimum_step: BalanceOf<T>,//最小加价幅度
 			upper_bound_price: Option<BalanceOf<T>>,//封顶价
-			start_at: T::Moment,//起拍时间
-			stop_at: T::Moment,//结束时间
-			wait_period: T::Moment //竞价等待时间
+			// start_at: T::Moment,//起拍时间
+			// stop_at: T::Moment,//结束时间
+			// wait_period: T::Moment //竞价等待时间
 			) -> Result {
 			Ok(())
 		}
@@ -181,7 +181,7 @@ decl_module! {
 // );
 
 impl<T: Trait> Module<T> {
-	fn do_create_auction(owner: T::AccountId, item: T::ItemId, start_at: T::Moment, stop_at: T::Moment) -> result::Result<T::AuctionId, &'static str> {
+	fn do_create_auction(owner: T::AccountId, item: T::ItemId) -> result::Result<T::AuctionId, &'static str> {
 		Ok(T::AuctionId::zero())
 	}
 
