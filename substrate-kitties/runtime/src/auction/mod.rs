@@ -83,7 +83,7 @@ pub struct Auction<T> where T: Trait {
 	begin_price: BalanceOf<T>, // 起拍价
 	upper_bound_price: Option<BalanceOf<T>>, // 封顶价（可选）
 	minimum_step: BalanceOf<T>, // 最小加价幅度
-	latest_participate_time: Option<T::Moment>, // 最后出价时间
+	latest_participate: Option<(T::AccountId, T::Moment)>, // 最后出价人/时间
 	status: AuctionStatus,
 }
 
