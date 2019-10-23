@@ -21,6 +21,7 @@ use client::{
 	runtime_api as client_api, impl_runtime_apis
 };
 use aura_primitives::sr25519::AuthorityId as AuraId;
+use system::offchain::TransactionSubmitter;
 use grandpa::{AuthorityId as GrandpaId, AuthorityWeight as GrandpaWeight};
 use grandpa::fg_primitives;
 use version::RuntimeVersion;
@@ -248,9 +249,14 @@ impl kitties::Trait for Runtime {
 	type KittyIndex = u32;
 }
 
+type SubmitTransaction = TransactionSubmitter<AuraId, Runtime, UncheckedExtrinsic>;
+
 impl auction::Trait for Runtime {
 	type Event = Event;
-	type AuthorityId = AuraId;
+	// offchain related
+	type Call = Call;
+	type SubmitTransaction = SubmitTransaction;
+	// auction related
 	type ItemId = u32;
 	type AuctionId = u32;
 	type Currency = Balances;
