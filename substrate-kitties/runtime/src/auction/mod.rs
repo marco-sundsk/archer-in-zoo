@@ -4,6 +4,9 @@ use sr_primitives::traits::{
 	CheckedAdd, CheckedSub,
 	Saturating, Bounded, SaturatedConversion,
 };
+use sr_primitives::transaction_validity::{
+	TransactionValidity, TransactionLongevity, ValidTransaction, InvalidTransaction,
+};
 use rstd::result;
 use support::dispatch::Result;
 use support::{
@@ -14,18 +17,13 @@ use support::{
 	}
 };
 use system::ensure_signed;
+use system::offchain::SubmitUnsignedTransaction;
 use codec::{Encode, Decode};
 use rstd::vec::Vec;
 use crate::traits::ItemTransfer;
 
 /// The module's configuration trait.
-pub trait Trait: timestamp::Trait {
-	/// The identifier type for an authority.
-	type AuthorityId: Parameter
-		+ Member
-		+ RuntimeAppPublic
-		+ Default;
-
+pub trait Trait: timestamp::Trait + aura::Trait {
 	/// Item Id
 	type ItemId: Parameter
 		+ Member
@@ -48,14 +46,17 @@ pub trait Trait: timestamp::Trait {
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 
-	/// Handler for the unbalanced reduction when taking a auction fee.
-	type OnAuctionPayment: OnUnbalanced<NegativeImbalanceOf<Self>>;
+	/// A dispatchable call type.
+	type Call: From<Call<Self>>;
+
+	/// A transaction submitter.
+	type SubmitTransaction: SubmitUnsignedTransaction<Self, <Self as Trait>::Call>;
 	
 	/// Interface for transfer item
 	type AuctionTransfer: ItemTransfer<Self::AccountId, Self::ItemId>;
 
-	// TODO more fee constant for auction
-	// type AuctionBaseFee: Get<BalanceOf<Self>>;
+	/// Handler for the unbalanced reduction when taking a auction fee.
+	type OnAuctionPayment: OnUnbalanced<NegativeImbalanceOf<Self>>;
 }
 
 pub type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
@@ -151,7 +152,7 @@ decl_module! {
 		pub fn start_auction(
 			origin,
 			auction: T::AuctionId,
-			signature: <T::AuthorityId as RuntimeAppPublic>::Signature
+			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
 		) -> Result { // Called by offchain worker
 			Ok(())
 		}
@@ -159,7 +160,7 @@ decl_module! {
 		pub fn stop_auction(
 			origin,
 			auction: T::AuctionId,
-			signature: <T::AuthorityId as RuntimeAppPublic>::Signature
+			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
 		) -> Result { // Called by offchain worker
 			Ok(())
 		}
@@ -172,7 +173,12 @@ decl_module! {
 			Ok(())
 		}
 
+		// Runs after every block.
 		fn offchain_worker(now: <T as system::Trait>::BlockNumber) {
+			// Only send messages if we are a potential validator.
+			if runtime_io::is_validator() {
+				Self::offchain(now);
+			}
 		}
 	}
 }
@@ -227,5 +233,21 @@ impl<T: Trait> Module<T> {
 
 	fn do_settle_auction(auction: T::AuctionId) -> Result {
 		Ok(())
+	}
+
+	// ====== offchain worker related methods ======
+	/// only run by current validator
+	pub(crate) fn offchain(now: T::BlockNumber) {
+		// TODO check auction start
+		// TODO check auction end
+	}
+}
+
+impl<T: Trait> support::unsigned::ValidateUnsigned for Module<T> {
+	type Call = Call<T>;
+
+	fn validate_unsigned(call: &Self::Call) -> TransactionValidity {
+		// TODO
+		InvalidTransaction::Call.into()
 	}
 }

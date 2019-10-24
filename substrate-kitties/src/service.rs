@@ -3,8 +3,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 use substrate_client::LongestChain;
-use aura_primitives::sr25519::{AuthorityPair as AuraPair};
-use grandpa::{self, FinalityProofProvider as GrandpaFinalityProofProvider};
 use futures::prelude::*;
 use substrate_kitties_runtime::{self, GenesisConfig, opaque::Block, RuntimeApi};
 use substrate_service::{error::{Error as ServiceError}, AbstractService, Configuration, ServiceBuilder};
@@ -13,6 +11,8 @@ use inherents::InherentDataProviders;
 use network::{construct_simple_protocol};
 use substrate_executor::native_executor_instance;
 pub use substrate_executor::NativeExecutor;
+use aura_primitives::sr25519::{AuthorityPair as AuraPair};
+use grandpa::{self, FinalityProofProvider as GrandpaFinalityProofProvider};
 
 // Our native executor instance.
 native_executor_instance!(
