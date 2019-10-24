@@ -93,6 +93,18 @@ pub enum AuctionStatus {
 	Active,
 	Stopped,
 }
+// method for error string
+impl AuctionStatus {
+	/// Whether this block is the new best block.
+	pub fn error_str(self) -> &'static str {
+		match self {
+			AuctionStatus::PendingStart => "Auction is already started or over.",
+			AuctionStatus::Paused => "Auction should be paused.",
+			AuctionStatus::Active => "Auction should be acive.",
+			AuctionStatus::Stopped => "Auction should be stopped.",
+		}
+	}
+}
 
 #[derive(Encode, Decode, Clone, PartialEq, Copy)]
 #[cfg_attr(feature = "std", derive(Debug))]
@@ -220,17 +232,7 @@ decl_module! {
 		) -> Result {
 			let sender = ensure_signed(origin)?;
 
-			// unwrap auction and ensure its status is not stopped yet.
-			let auction = Self::auctions(auction_id);
-			ensure!(auction.is_some(), "Auction does not exist");
-			let mut auction = auction.unwrap();
-			ensure!(auction.status != AuctionStatus::Stopped,
-				"Auction can NOT be stopped now.");
-			
-			// ensure only owner can call this
-			ensure!(auction.owner == sender, "Only owner can call this fn.");
-
-			Self::do_stop_auction(&mut auction)
+			Self::do_stop_auction(&sender, auction_id)
 		}
 
 		pub fn participate_auction(
@@ -240,11 +242,9 @@ decl_module! {
 		) -> Result {
 			let participant = ensure_signed(origin)?;
 
-			let auction = Self::auctions(auction_id);
-			ensure!(auction.is_some(), "Auction does not exist");
-			let auction = auction.unwrap();
-			ensure!(auction.status == AuctionStatus::Active,
-					"Auction not activated");
+			// unwrap auction and ensure its status is Active
+			let auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::Active), None)?;
+
 			match auction.latest_participate {
 					Some((_account, _moment)) => { // 已经有用户出价
 							let bid_price = <AuctionBids<T>>::get(auction.id, _account);
@@ -320,6 +320,31 @@ impl<T: Trait> Module<T> {
 		Ok(auction_id)
 	}
 
+	// utility method for ensure auction status
+	// add by Tang 20191024
+	fn _ensure_auction_with_status(
+		auction_id: T::AuctionId,
+		status: Option<AuctionStatus>,
+		owner: Option<&T::AccountId>
+	) -> result::Result<Auction<T>, &'static str> {
+		// unwrap auction and ensure its status
+		let auction = Self::auctions(auction_id);
+		ensure!(auction.is_some(), "Auction does not exist");
+
+		let auction = auction.unwrap();
+		// check status equel
+		if let Some(s) = status {
+			ensure!(auction.status == s, s.error_str());
+		}
+		// check owner or not
+		if let Some(account) = owner {
+			// ensure only owner can call this
+			ensure!(auction.owner == *account, "Only owner can call this fn.");
+		}
+
+		Ok(auction)
+	}
+
 	// add an auction to pending vec, if it is not in there yet.
 	// add by sunhao 20191024
 	fn add2pendings(auction_id: T::AuctionId) {
@@ -384,23 +409,20 @@ impl<T: Trait> Module<T> {
 		Self::insert_auction(auction_id, new_auction);
 		Ok(auction_id)
 	}
+
 	fn do_add_item(
 		sender: &T::AccountId, 
 		auction_id: T::AuctionId,
 		item: T::ItemId,//竞拍对象
 	) -> Result {
-			// unwrap auction and ensure its status is PendingStart
-			let auction = Self::auctions(auction_id);
-			ensure!(auction.is_some(), "Auction does not exist");
-			let mut auction = auction.unwrap();
-			ensure!(auction.status == AuctionStatus::PendingStart, 
-				"Auction is already started or over.");
-			// ensure only owner can call this
-			ensure!(auction.owner == *sender, "Only owner can call this fn.");
-			// change status of auction
-			auction.item = Some(item);
-			<Auctions<T>>::insert(auction_id, auction);
-			Ok(())
+		// unwrap auction and ensure its status is PendingStart
+		let mut auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::PendingStart), Some(sender))?;
+
+		// change status of auction
+		auction.item = Some(item);
+		<Auctions<T>>::insert(auction_id, auction);
+
+		Ok(())
 	}
 
 	// real work for do_setup_moments.
@@ -413,14 +435,7 @@ impl<T: Trait> Module<T> {
 		wait_period: Option<T::Moment>  //竞价等待时间
 	) -> Result {
 		// unwrap auction and ensure its status is PendingStart
-		let auction = Self::auctions(auction_id);
-		ensure!(auction.is_some(), "Auction does not exist");
-		let mut auction = auction.unwrap();
-		ensure!(auction.status == AuctionStatus::PendingStart, 
-			"Auction is already started or over.");
-
-		// ensure only owner can call this
-		ensure!(auction.owner == *owner, "Only owner can call this fn.");
+		let mut auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::PendingStart), Some(owner))?;
 
 		// set moments into storage
 		if start_at.is_some() {
@@ -449,14 +464,7 @@ impl<T: Trait> Module<T> {
 		auction_id: T::AuctionId
 	) -> Result {
 		// unwrap auction and ensure its status is Active
-		let auction = Self::auctions(auction_id);
-		ensure!(auction.is_some(), "Auction does not exist");
-		let mut auction = auction.unwrap();
-		ensure!(auction.status == AuctionStatus::Active, 
-			"Auction can NOT be paused now.");
-		
-		// ensure only owner can call this
-		ensure!(auction.owner == *owner, "Only owner can call this fn.");
+		let mut auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::Active), Some(owner))?;
 
 		// change status of auction
 		auction.status = AuctionStatus::Paused;
@@ -478,14 +486,7 @@ impl<T: Trait> Module<T> {
 		auction_id: T::AuctionId
 	) -> Result {
 		// unwrap auction and ensure its status is Paused
-		let auction = Self::auctions(auction_id);
-		ensure!(auction.is_some(), "Auction does not exist");
-		let mut auction = auction.unwrap();
-		ensure!(auction.status == AuctionStatus::Paused, 
-			"Auction can NOT be resumed now.");
-		
-		// ensure only owner can call this
-		ensure!(auction.owner == *owner, "Only owner can call this fn.");
+		let mut auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::Paused), Some(owner))?;
 
 		// change status of auction
 		auction.status = AuctionStatus::Active;
@@ -502,9 +503,17 @@ impl<T: Trait> Module<T> {
 
 	// real work for stopping a auction.
 	// added by sunhao 20191024
-	fn do_stop_auction(auction: &mut Auction<T>) -> Result {
+	// modified by Tang 20191024
+	fn do_stop_auction(
+		owner: &T::AccountId,
+		auction_id: T::AuctionId
+	) -> Result {
+		// unwrap auction and ensure its status is not stopped yet.
+		let mut auction = Self::_ensure_auction_with_status(auction_id, None, Some(owner))?;
 
-		let auction_id = auction.id;
+		ensure!(auction.status != AuctionStatus::Stopped,
+			"Auction can NOT be stopped now.");
+
 		// call settle func if needed.
 		if auction.status != AuctionStatus::PendingStart {
 			Self::do_settle_auction(auction_id)?;
@@ -528,10 +537,7 @@ impl<T: Trait> Module<T> {
 	}
 
 	fn do_settle_auction(auction: T::AuctionId) -> Result {
-		Ok(())
-	}
-
-	fn do_enable_auction(auction: T::AuctionId) -> Result {
+		// TODO auction done stuffs
 		Ok(())
 	}
 
