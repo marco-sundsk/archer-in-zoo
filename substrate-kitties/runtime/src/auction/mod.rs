@@ -180,6 +180,12 @@ decl_module! {
 			if wait_period.is_some() {
 				auction.wait_period = wait_period;
 			}
+
+			// save to storage
+			<Auctions<T>>::insert(auction_id, auction);
+
+			// ensure this auction in pending queue, once owner call this fn.
+			Self::add2pendings(auction_id);
 				
 			Ok(())
 		}
@@ -201,6 +207,9 @@ decl_module! {
 
 			// change status of auction
 			auction.status = AuctionStatus::Paused;
+
+			// save to storage
+			<Auctions<T>>::insert(auction_id, auction);
 
 			// emit event
 			Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
@@ -226,6 +235,9 @@ decl_module! {
 
 			// change status of auction
 			auction.status = AuctionStatus::Active;
+
+			// save to storage
+			<Auctions<T>>::insert(auction_id, auction);
 
 			// emit event
 			Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
@@ -305,6 +317,40 @@ impl<T: Trait> Module<T> {
 		Ok(auction_id)
 	}
 
+	// add an auction to pending vec, if it is not in there yet.
+	// add by sunhao 20191024
+	fn add2pendings(auction_id: T::AuctionId) {
+		let mut pending_auctions = Self::pending_auctions();
+		let mut flag = false;
+		for elem in pending_auctions.iter() {
+			if *elem == auction_id {
+				flag = true;
+				break;
+			}
+		}
+		if !flag {
+			pending_auctions.push(auction_id);
+			<PendingAuctions<T>>::put(pending_auctions);
+		}
+	}
+
+	// remove an auction from active vec.
+	// add by sunhao 20191024
+	fn remove_from_active(auction_id: T::AuctionId) {
+		let mut active_auctions = Self::active_auctions();
+		let mut index = active_auctions.len();
+		for (i, elem) in active_auctions.iter().enumerate() {
+			if *elem == auction_id {
+				index = i;
+				break;
+			}
+		}
+		if index != active_auctions.len() {
+			active_auctions.remove(index);
+			<ActiveAuctions<T>>::put(active_auctions);
+		}
+	}
+
 	fn insert_auction(owner: &T::AccountId, auction_id: T::AuctionId, auction:Auction<T>) {
 		// Create and store kitty
 		<Auctions<T>>::insert(auction_id, auction);
@@ -356,17 +402,25 @@ impl<T: Trait> Module<T> {
 	// real work for stopping a auction.
 	// added by sunhao 20191024
 	fn do_stop_auction(auction: &mut Auction<T>) -> Result {
+
+		let auction_id = auction.id;
 		// call settle func if needed.
 		if auction.status != AuctionStatus::PendingStart {
-			Self::do_settle_auction(auction.id)?;
+			Self::do_settle_auction(auction_id)?;
 		}
 
 		// change status of auction
 		let old_status = auction.status;
 		auction.status = AuctionStatus::Stopped;
+
+		// save to storage
+		<Auctions<T>>::insert(auction_id, auction);
+
+		// remove from active vecs
+		Self::remove_from_active(auction_id);
 		
 		// emit event
-		Self::deposit_event(RawEvent::AuctionUpdated(auction.id, 
+		Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
 			old_status, AuctionStatus::Stopped));
 		
 		Ok(())
