@@ -10,7 +10,7 @@ use sr_primitives::transaction_validity::{
 use rstd::result;
 use support::dispatch::Result;
 use support::{
-	decl_module, decl_storage, decl_event, Parameter, ensure,
+	decl_module, decl_storage, decl_event, Parameter, ensure, print,
 	traits::{
 		LockableCurrency, Currency,
 		OnUnbalanced,
@@ -91,15 +91,17 @@ pub struct Auction<T> where T: Trait {
 // This module's storage items.
 decl_storage! {
 	trait Store for Module<T: Trait> as Auction {
-		NextAuctionId get(next_auction_id): T::AuctionId;
+		NextAuctionId get(fn next_auction_id): T::AuctionId;
 		
 		// 物品id映射auctionid，一个物品只能在一个auction中参拍，创建auction后添加映射，auction结束后删除映射
-		AuctionItems get(auction_items): map T::ItemId => Option<T::AuctionId>;
-		Auctions get(auctions): map T::AuctionId => Option<Auction<T>>;
-		AuctionBids get(auction_bids): double_map T::AuctionId, twox_128(T::AccountId) => Option<BalanceOf<T>>;
-		AuctionParticipants get(action_participants): map T::AuctionId => Option<Vec<T::AccountId>>;
-		PendingAuctions get(pending_auctions): Vec<T::AuctionId>; // 尚未开始的auction
-		ActiveAuctions get(active_auctions): Vec<T::AuctionId>; // 尚未结束的auction，已经暂停的也在这里
+		AuctionItems get(fn auction_items): map T::ItemId => Option<T::AuctionId>;
+		Auctions get(fn auctions): map T::AuctionId => Option<Auction<T>>;
+		AuctionBids get(fn auction_bids): double_map T::AuctionId, twox_128(T::AccountId) => BalanceOf<T>;
+		AuctionParticipants get(fn action_participants): map T::AuctionId => Option<Vec<T::AccountId>>;
+
+		// Auction workinig list
+		PendingAuctions get(fn pending_auctions): Vec<T::AuctionId>; // 尚未开始的auction
+		ActiveAuctions get(fn active_auctions): Vec<T::AuctionId>; // 尚未结束的auction，已经暂停的也在这里
 	}
 }
 
@@ -232,14 +234,6 @@ decl_module! {
 			Ok(())
 		}
 
-		pub fn start_auction(
-			origin,
-			auction: T::AuctionId,
-			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
-		) -> Result { // Called by offchain worker
-			Ok(())
-		}
-
 		// owner can stop an active or paused auction by his will.
 		// add by sunhao 20191024
 		pub fn stop_auction(
@@ -267,6 +261,27 @@ decl_module! {
 			origin,
 			auction: T::AuctionId,
 			price: BalanceOf<T>
+		) -> Result {
+			Ok(())
+		}
+
+		// ===== passive method =====
+		// starting auction methods
+		// Called by offchain worker
+		fn start_auction_passive(
+			origin,
+			auctions: Vec<T::AuctionId>,
+			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
+		) -> Result {
+			Ok(())
+		}
+
+		// stoping auction methods
+		// Called by offchain worker
+		fn stop_auction_passive(
+			origin,
+			auctions: Vec<T::AuctionId>,
+			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
 		) -> Result {
 			Ok(())
 		}
@@ -357,23 +372,106 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	fn do_enable_auction(auction: T::AuctionId) -> Result {
-		Ok(())
-	}
-
-	fn do_disable_auction(auction: T::AuctionId) -> Result {
-		Ok(())
-	}
-
 	fn do_settle_auction(auction: T::AuctionId) -> Result {
 		Ok(())
 	}
 
 	// ====== offchain worker related methods ======
 	/// only run by current validator
-	pub(crate) fn offchain(now: T::BlockNumber) {
-		// TODO check auction start
-		// TODO check auction end
+	pub(crate) fn offchain(_now: T::BlockNumber) {
+		// check auction start
+		let pending_auctions = <PendingAuctions<T>>::get();
+		let last_timestamp = <aura::Module<T>>::last();
+
+		let starting_auction_ids: Vec<T::AuctionId> = pending_auctions.into_iter()
+			.filter_map(|auction_id| {
+				let auction = match <Auctions<T>>::get(auction_id) {
+					Some(a) => a,
+					None => return None,
+				};
+				let start_at = match auction.start_at {
+					Some(t) => t,
+					None => return None,
+				};
+				// Condition: start_at < now
+				if start_at < last_timestamp {
+					Some(auction.id)
+				} else {
+					None
+				}
+			})
+			.collect();
+		// only start matched
+		match Self::send_auction_start_tx(starting_auction_ids) {
+			Ok(_) => {},
+			Err(err) => print(err),
+		}
+
+		// check auction end
+		let active_auctions = <ActiveAuctions<T>>::get();
+
+		let stoping_auction_ids: Vec<T::AuctionId> = active_auctions.into_iter()
+			.filter_map(|auction_id| {
+				let auction = match <Auctions<T>>::get(auction_id) {
+					Some(a) => a,
+					None => return None,
+				};
+				let stop_at = match auction.stop_at {
+					Some(t) => t,
+					None => return None,
+				};
+				// Condition A: stop_at < now
+				if stop_at < last_timestamp {
+					return Some(auction.id);
+				}
+				// Condition B: reach upper_bound_price
+				let upper_bound_price = match auction.upper_bound_price {
+					Some(v) => v,
+					None => return None,
+				};
+				// get last participate price
+				if let Some((account_id, _)) = auction.latest_participate {
+					let last_price = <AuctionBids<T>>::get(&auction.id, account_id);
+					if last_price >= upper_bound_price {
+						return Some(auction.id);
+					}
+				}
+				None
+			})
+			.collect();
+		// only stop matched
+		match Self::send_auction_stop_tx(stoping_auction_ids) {
+			Ok(_) => {},
+			Err(err) => print(err),
+		}
+	}
+
+	/// Returns own authority identifier iff it is part of the current authority
+	/// set, otherwise this function returns None. The restriction might be
+	/// softened in the future in case a consumer needs to learn own authority
+	/// identifier.
+	fn authority_id() -> Option<T::AuthorityId> {
+		let authorities = <aura::Module<T>>::authorities();
+
+		let local_keys = T::AuthorityId::all();
+
+		authorities.into_iter().find_map(|authority| {
+			if local_keys.contains(&authority) {
+				Some(authority)
+			} else {
+				None
+			}
+		})
+	}
+
+	fn send_auction_start_tx(auction_ids: Vec<T::AuctionId>) -> Result {
+		// TODO
+		Ok(())
+	}
+
+	fn send_auction_stop_tx(auction_ids: Vec<T::AuctionId>) -> Result {
+		// TODO
+		Ok(())
 	}
 }
 
