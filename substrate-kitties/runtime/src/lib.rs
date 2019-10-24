@@ -312,7 +312,7 @@ construct_runtime!(
 		// Substrate Kitties module
 		Kitties: kitties::{Module, Storage, Call, Event<T>},
 		// Auction module
-		Auction: auction::{Module, Call, Storage, Event<T>},
+		Auction: auction::{Module, Call, Storage, Event<T>, ValidateUnsigned},
 		RandomnessCollectiveFlip: randomness_collective_flip::{Module, Call, Storage},
 	}
 );

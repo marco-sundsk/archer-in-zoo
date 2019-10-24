@@ -1,8 +1,8 @@
-use sr_primitives::{RuntimeAppPublic};
+use sr_primitives::{RuntimeAppPublic, RuntimeDebug};
 use sr_primitives::traits::{
-	SimpleArithmetic, Member, One, Zero,
-	CheckedAdd, CheckedSub,
-	Saturating, Bounded, SaturatedConversion,
+	SimpleArithmetic, Member, Bounded, One, Zero,
+	Printable,
+	CheckedAdd, CheckedSub, Saturating, SaturatedConversion,
 };
 use sr_primitives::transaction_validity::{
 	TransactionValidity, TransactionLongevity, ValidTransaction, InvalidTransaction,
@@ -24,6 +24,24 @@ use rstd::vec::Vec;
 use crate::traits::ItemTransfer;
 
 const AUCTION_ID: LockIdentifier = *b"auction ";
+
+/// Error which may occur while executing the off-chain code.
+#[derive(RuntimeDebug)]
+enum OffchainErr {
+	MissingKey,
+	FailedSigning,
+	SubmitTransaction,
+}
+
+impl Printable for OffchainErr {
+	fn print(&self) {
+		match self {
+			OffchainErr::MissingKey => print("Offchain error: failed to find authority key"),
+			OffchainErr::FailedSigning => print("Offchain error: signing failed!"),
+			OffchainErr::SubmitTransaction => print("Offchain error: submitting transaction failed!"),
+		}
+	}
+}
 
 /// The module's configuration trait.
 pub trait Trait: timestamp::Trait + aura::Trait {
@@ -65,6 +83,7 @@ pub trait Trait: timestamp::Trait + aura::Trait {
 pub type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
 type NegativeImbalanceOf<T> =
 	<<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::NegativeImbalance;
+type SignatureOf<T> = <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature;
 
 #[derive(Encode, Decode, Clone, Copy, Eq, PartialEq)]
 #[cfg_attr(feature = "std", derive(Debug))]
@@ -260,8 +279,7 @@ decl_module! {
 		// add by sunhao 20191024
 		pub fn stop_auction(
 			origin,
-			auction_id: T::AuctionId //,
-			// signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
+			auction_id: T::AuctionId
 		) -> Result {
 			let sender = ensure_signed(origin)?;
 
@@ -322,7 +340,7 @@ decl_module! {
 		fn start_auction_passive(
 			origin,
 			auctions: Vec<T::AuctionId>,
-			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
+			signature: SignatureOf<T>
 		) -> Result {
 			Ok(())
 		}
@@ -332,7 +350,7 @@ decl_module! {
 		fn stop_auction_passive(
 			origin,
 			auctions: Vec<T::AuctionId>,
-			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
+			signature: SignatureOf<T>
 		) -> Result {
 			Ok(())
 		}
@@ -547,7 +565,7 @@ impl<T: Trait> Module<T> {
 			})
 			.collect();
 		// only start matched
-		match Self::send_auction_start_tx(starting_auction_ids) {
+		match Self::_send_auction_start_tx(starting_auction_ids) {
 			Ok(_) => {},
 			Err(err) => print(err),
 		}
@@ -585,17 +603,33 @@ impl<T: Trait> Module<T> {
 			})
 			.collect();
 		// only stop matched
-		match Self::send_auction_stop_tx(stoping_auction_ids) {
+		match Self::_send_auction_stop_tx(stoping_auction_ids) {
 			Ok(_) => {},
 			Err(err) => print(err),
 		}
+	}
+
+	fn _send_auction_start_tx(
+		auction_ids: Vec<T::AuctionId>
+	) -> result::Result<(), OffchainErr> {
+		let signature = Self::_sign_unchecked_payload(&auction_ids.encode())?;
+		let call = Call::start_auction_passive(auction_ids, signature);
+		// TODO
+		Ok(())
+	}
+
+	fn _send_auction_stop_tx(
+		auction_ids: Vec<T::AuctionId>
+	) -> result::Result<(), OffchainErr> {
+		// TODO
+		Ok(())
 	}
 
 	/// Returns own authority identifier iff it is part of the current authority
 	/// set, otherwise this function returns None. The restriction might be
 	/// softened in the future in case a consumer needs to learn own authority
 	/// identifier.
-	fn authority_id() -> Option<T::AuthorityId> {
+	fn _authority_id() -> Option<T::AuthorityId> {
 		let authorities = <aura::Module<T>>::authorities();
 
 		let local_keys = T::AuthorityId::all();
@@ -609,14 +643,14 @@ impl<T: Trait> Module<T> {
 		})
 	}
 
-	fn send_auction_start_tx(auction_ids: Vec<T::AuctionId>) -> Result {
-		// TODO
-		Ok(())
-	}
-
-	fn send_auction_stop_tx(auction_ids: Vec<T::AuctionId>) -> Result {
-		// TODO
-		Ok(())
+	/// Sign for unchecked transaction
+	fn _sign_unchecked_payload(payload: &Vec<u8>) -> result::Result<SignatureOf<T>, OffchainErr> {
+		let key = Self::_authority_id();
+		if key.is_none() {
+			return Err(OffchainErr::MissingKey);
+		}
+		let sig = key.unwrap().sign(payload).ok_or(OffchainErr::FailedSigning)?;
+		Ok(sig)
 	}
 	
 	fn do_query_one_auction(
