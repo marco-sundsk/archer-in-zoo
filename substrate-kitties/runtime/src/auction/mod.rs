@@ -87,6 +87,13 @@ pub struct Auction<T> where T: Trait {
 	latest_participate: Option<(T::AccountId, T::Moment)>, // 最后出价人/时间
 	status: AuctionStatus,
 }
+#[derive(Encode, Decode, Clone, PartialEq)]
+#[cfg_attr(feature = "std", derive(Debug))]
+pub struct DetailAuction<T> where T: Trait {
+	auction: Auction<T>,//
+	is_participate: bool,//是否参与
+	participate_price: BalanceOf<T>,//参与的最新出价
+}
 
 // This module's storage items.
 decl_storage! {
@@ -296,6 +303,15 @@ decl_module! {
 			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
 		) -> Result {
 			Ok(())
+		}
+		
+		//query one auction with auctionId
+		pub fn query_one_auction(
+			origin,
+			auction: T::AuctionId,
+			) {
+			let sender = ensure_signed(origin)?;
+			Self::do_query_one_auction(auction, sender.clone())?;
 		}
 
 		// Runs after every block.
@@ -526,6 +542,34 @@ impl<T: Trait> Module<T> {
 	fn send_auction_stop_tx(auction_ids: Vec<T::AuctionId>) -> Result {
 		// TODO
 		Ok(())
+	}
+	
+	fn do_query_one_auction(
+		auction: T::AuctionId,
+		sender: T::AccountId
+	) -> result::Result<DetailAuction<T>, &'static str> {
+		let one_auction = Self::auctions(auction);
+		let sender_bid = Self::auction_bids(auction, sender.clone());
+		let account_ids = Self::action_participants(auction).unwrap();
+		let mut is_bool: bool = false;
+
+		ensure!(one_auction.is_some(), "One invalid auction");
+
+		let detail_auction :DetailAuction<T>;
+		if let Some(auction) = one_auction{
+			for i in &account_ids {
+				if let i = sender.clone() {
+					is_bool = true;
+				}
+			}
+			detail_auction = DetailAuction {
+				auction: auction,
+				is_participate: is_bool,
+				participate_price: sender_bid,
+			};
+			return Ok(detail_auction);
+		}
+		Err("query fail")
 	}
 }
 
