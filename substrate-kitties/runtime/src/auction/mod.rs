@@ -246,7 +246,7 @@ decl_module! {
 			ensure!(auction.is_some(), "Auction does not exist");
 			let mut auction = auction.unwrap();
 			ensure!(auction.status != AuctionStatus::Stopped,
-				"Auction can NOT be resumed now.");
+				"Auction can NOT be stopped now.");
 			
 			// ensure only owner can call this
 			ensure!(auction.owner == sender, "Only owner can call this fn.");
