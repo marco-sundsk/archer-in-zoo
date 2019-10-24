@@ -70,7 +70,6 @@ impl balances::Trait for Test {
 
 impl Trait for Test {
   type Event = ();
-	type AuthorityId = UintAuthorityId;
   type ItemId = u32;
   type AuctionId = u32;
   type Currency = balances::Module<Self>;
