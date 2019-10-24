@@ -174,11 +174,53 @@ decl_module! {
 			Ok(())
 		}
 
-		pub fn pause_auction(origin, auction: T::AuctionId) -> Result {
+		// Owner can pause the auction when it is in active.
+		// add by sunhao 20191024
+		pub fn pause_auction(origin, auction_id: T::AuctionId) -> Result {
+			let sender = ensure_signed(origin)?;
+
+			// unwrap auction and ensure its status is Active
+			let auction = Self::auctions(auction_id);
+			ensure!(auction.is_some(), "Auction does not exist");
+			let mut auction = auction.unwrap();
+			ensure!(auction.status == AuctionStatus::Active, 
+				"Auction can NOT be paused now.");
+			
+			// ensure only owner can call this
+			ensure!(auction.owner == sender, "Only owner can call this fn.");
+
+			// change status of auction
+			auction.status = AuctionStatus::Paused;
+
+			// emit event
+			Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
+				AuctionStatus::Active, AuctionStatus::Paused));
+
 			Ok(())
 		}
 
-		pub fn resume_auction(origin, auction: T::AuctionId) -> Result {
+		// Owner can resume the auction paused before.
+		// add by sunhao 20191024
+		pub fn resume_auction(origin, auction_id: T::AuctionId) -> Result {
+			let sender = ensure_signed(origin)?;
+
+			// unwrap auction and ensure its status is Paused
+			let auction = Self::auctions(auction_id);
+			ensure!(auction.is_some(), "Auction does not exist");
+			let mut auction = auction.unwrap();
+			ensure!(auction.status == AuctionStatus::Paused, 
+				"Auction can NOT be resumed now.");
+			
+			// ensure only owner can call this
+			ensure!(auction.owner == sender, "Only owner can call this fn.");
+
+			// change status of auction
+			auction.status = AuctionStatus::Active;
+
+			// emit event
+			Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
+				AuctionStatus::Paused, AuctionStatus::Active));
+
 			Ok(())
 		}
 
@@ -190,11 +232,37 @@ decl_module! {
 			Ok(())
 		}
 
+		// owner can stop an active or paused auction by his will.
+		// add by sunhao 20191024
 		pub fn stop_auction(
 			origin,
-			auction: T::AuctionId,
-			signature: <T::AuthorityId as RuntimeAppPublic>::Signature
-		) -> Result { // Called by offchain worker
+			auction_id: T::AuctionId //,
+			// signature: <T::AuthorityId as RuntimeAppPublic>::Signature
+		) -> Result {
+			let sender = ensure_signed(origin)?;
+
+			// unwrap auction and ensure its status is not stopped yet.
+			let auction = Self::auctions(auction_id);
+			ensure!(auction.is_some(), "Auction does not exist");
+			let mut auction = auction.unwrap();
+			ensure!(auction.status != AuctionStatus::Stopped,
+				"Auction can NOT be resumed now.");
+			
+			// ensure only owner can call this
+			ensure!(auction.owner == sender, "Only owner can call this fn.");
+
+			// call settle func if needed.
+			if auction.status != AuctionStatus::PendingStart {
+				Self::do_settle_auction(auction_id);
+			}
+
+			// change status of auction
+			auction.status = AuctionStatus::Stopped;
+			
+			// emit event
+			Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
+				AuctionStatus::Paused, AuctionStatus::Active));
+			
 			Ok(())
 		}
 
