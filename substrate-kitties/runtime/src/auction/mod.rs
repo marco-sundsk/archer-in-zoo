@@ -10,7 +10,7 @@ use sr_primitives::transaction_validity::{
 use rstd::result;
 use support::dispatch::Result;
 use support::{
-	decl_module, decl_storage, decl_event, Parameter, ensure,
+	decl_module, decl_storage, decl_event, Parameter, ensure, print,
 	traits::{
 		LockableCurrency, Currency,
 		OnUnbalanced,
@@ -91,15 +91,17 @@ pub struct Auction<T> where T: Trait {
 // This module's storage items.
 decl_storage! {
 	trait Store for Module<T: Trait> as Auction {
-		NextAuctionId get(next_auction_id): T::AuctionId;
+		NextAuctionId get(fn next_auction_id): T::AuctionId;
 		
 		// 物品id映射auctionid，一个物品只能在一个auction中参拍，创建auction后添加映射，auction结束后删除映射
-		AuctionItems get(auction_items): map T::ItemId => Option<T::AuctionId>;
-		Auctions get(auctions): map T::AuctionId => Option<Auction<T>>;
-		AuctionBids get(auction_bids): double_map T::AuctionId, twox_128(T::AccountId) => Option<BalanceOf<T>>;
-		AuctionParticipants get(action_participants): map T::AuctionId => Option<Vec<T::AccountId>>;
-		PendingAuctions get(pending_auctions): Vec<T::AuctionId>; // 尚未开始的auction
-		ActiveAuctions get(active_auctions): Vec<T::AuctionId>; // 尚未结束的auction，已经暂停的也在这里
+		AuctionItems get(fn auction_items): map T::ItemId => Option<T::AuctionId>;
+		Auctions get(fn auctions): map T::AuctionId => Option<Auction<T>>;
+		AuctionBids get(fn auction_bids): double_map T::AuctionId, twox_128(T::AccountId) => Option<BalanceOf<T>>;
+		AuctionParticipants get(fn action_participants): map T::AuctionId => Option<Vec<T::AccountId>>;
+
+		// Auction workinig list
+		PendingAuctions get(fn pending_auctions): Vec<T::AuctionId>; // 尚未开始的auction
+		ActiveAuctions get(fn active_auctions): Vec<T::AuctionId>; // 尚未结束的auction，已经暂停的也在这里
 	}
 }
 
@@ -346,14 +348,6 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	fn do_enable_auction(auction: T::AuctionId) -> Result {
-		Ok(())
-	}
-
-	fn do_disable_auction(auction: T::AuctionId) -> Result {
-		Ok(())
-	}
-
 	fn do_settle_auction(auction: T::AuctionId) -> Result {
 		Ok(())
 	}
@@ -363,6 +357,14 @@ impl<T: Trait> Module<T> {
 	pub(crate) fn offchain(now: T::BlockNumber) {
 		// TODO check auction start
 		// TODO check auction end
+	}
+
+	fn filter_pending_auctions_to_start() {
+		// TODO
+	}
+
+	fn filter_pending_auctions_to_stop() {
+		// TODO
 	}
 }
 
