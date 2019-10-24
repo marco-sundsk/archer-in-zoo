@@ -140,7 +140,14 @@ decl_module! {
 
 			Ok(())
 		}
-
+		pub fn add_item(origin,
+			auction_id: T::AuctionId,
+			item: T::ItemId,//竞拍对象
+		) -> Result {
+			let sender = ensure_signed(origin)?;
+			Self::do_add_item(&sender, auction_id,item)?;
+			Ok(())
+		}
 		// setup start and/or stop Moment, and wait_period after someone's bid
 		// add by sunhao 20191023
 		pub fn setup_moments(origin,
@@ -313,7 +320,24 @@ impl<T: Trait> Module<T> {
 		Self::insert_auction(owner, auction_id, new_auction);
 		Ok(auction_id)
 	}
-
+	fn do_add_item(
+			sender: &T::AccountId, 
+			auction_id: T::AuctionId,
+			item: T::ItemId,//竞拍对象
+	) -> Result {
+			// unwrap auction and ensure its status is PendingStart
+			let auction = Self::auctions(auction_id);
+			ensure!(auction.is_some(), "Auction does not exist");
+			let mut auction = auction.unwrap();
+			ensure!(auction.status == AuctionStatus::PendingStart, 
+				"Auction is already started or over.");
+			// ensure only owner can call this
+			ensure!(auction.owner == *sender, "Only owner can call this fn.");
+			// change status of auction
+			auction.item = item;
+			<Auctions<T>>::insert(auction_id, auction);
+			Ok(())
+	}
 	// real work for stopping a auction.
 	// added by sunhao 20191024
 	fn do_stop_auction(auction: &mut Auction<T>) -> Result {
