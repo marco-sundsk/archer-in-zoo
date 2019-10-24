@@ -96,7 +96,7 @@ decl_storage! {
 		// 物品id映射auctionid，一个物品只能在一个auction中参拍，创建auction后添加映射，auction结束后删除映射
 		AuctionItems get(fn auction_items): map T::ItemId => Option<T::AuctionId>;
 		Auctions get(fn auctions): map T::AuctionId => Option<Auction<T>>;
-		AuctionBids get(fn auction_bids): double_map T::AuctionId, twox_128(T::AccountId) => Option<BalanceOf<T>>;
+		AuctionBids get(fn auction_bids): double_map T::AuctionId, twox_128(T::AccountId) => BalanceOf<T>;
 		AuctionParticipants get(fn action_participants): map T::AuctionId => Option<Vec<T::AccountId>>;
 
 		// Auction workinig list
@@ -263,7 +263,7 @@ decl_module! {
 		// Called by offchain worker
 		fn start_auction_passive(
 			origin,
-			auction: T::AuctionId,
+			auctions: Vec<T::AuctionId>,
 			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
 		) -> Result {
 			Ok(())
@@ -273,7 +273,7 @@ decl_module! {
 		// Called by offchain worker
 		fn stop_auction_passive(
 			origin,
-			auction: T::AuctionId,
+			auctions: Vec<T::AuctionId>,
 			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
 		) -> Result {
 			Ok(())
@@ -354,17 +354,100 @@ impl<T: Trait> Module<T> {
 
 	// ====== offchain worker related methods ======
 	/// only run by current validator
-	pub(crate) fn offchain(now: T::BlockNumber) {
-		// TODO check auction start
-		// TODO check auction end
+	pub(crate) fn offchain(_now: T::BlockNumber) {
+		// check auction start
+		let pending_auctions = <PendingAuctions<T>>::get();
+		let last_timestamp = <aura::Module<T>>::last();
+
+		let starting_auction_ids: Vec<T::AuctionId> = pending_auctions.into_iter()
+			.filter_map(|auction_id| {
+				let auction = match <Auctions<T>>::get(auction_id) {
+					Some(a) => a,
+					None => return None,
+				};
+				let start_at = match auction.start_at {
+					Some(t) => t,
+					None => return None,
+				};
+				// Condition: start_at < now
+				if start_at < last_timestamp {
+					Some(auction.id)
+				} else {
+					None
+				}
+			})
+			.collect();
+		// only start matched
+		match Self::send_auction_start_tx(starting_auction_ids) {
+			Ok(_) => {},
+			Err(err) => print(err),
+		}
+
+		// check auction end
+		let active_auctions = <ActiveAuctions<T>>::get();
+
+		let stoping_auction_ids: Vec<T::AuctionId> = active_auctions.into_iter()
+			.filter_map(|auction_id| {
+				let auction = match <Auctions<T>>::get(auction_id) {
+					Some(a) => a,
+					None => return None,
+				};
+				let stop_at = match auction.stop_at {
+					Some(t) => t,
+					None => return None,
+				};
+				// Condition A: stop_at < now
+				if stop_at < last_timestamp {
+					return Some(auction.id);
+				}
+				// Condition B: reach upper_bound_price
+				let upper_bound_price = match auction.upper_bound_price {
+					Some(v) => v,
+					None => return None,
+				};
+				// get last participate price
+				if let Some((account_id, _)) = auction.latest_participate {
+					let last_price = <AuctionBids<T>>::get(&auction.id, account_id);
+					if last_price >= upper_bound_price {
+						return Some(auction.id);
+					}
+				}
+				None
+			})
+			.collect();
+		// only stop matched
+		match Self::send_auction_stop_tx(stoping_auction_ids) {
+			Ok(_) => {},
+			Err(err) => print(err),
+		}
 	}
 
-	fn filter_pending_auctions_to_start() {
-		// TODO
+	/// Returns own authority identifier iff it is part of the current authority
+	/// set, otherwise this function returns None. The restriction might be
+	/// softened in the future in case a consumer needs to learn own authority
+	/// identifier.
+	fn authority_id() -> Option<T::AuthorityId> {
+		let authorities = <aura::Module<T>>::authorities();
+
+		let local_keys = T::AuthorityId::all();
+
+		authorities.into_iter().find_map(|authority| {
+			if local_keys.contains(&authority) {
+				Some(authority)
+			} else {
+				None
+			}
+		})
 	}
 
-	fn filter_pending_auctions_to_stop() {
+	fn send_auction_start_tx(auction_ids: Vec<T::AuctionId>) -> Result {
 		// TODO
+		Ok(())
+	}
+
+	fn send_auction_stop_tx(auction_ids: Vec<T::AuctionId>) -> Result {
+		// TODO
+		Ok(())
 	}
 }
 
