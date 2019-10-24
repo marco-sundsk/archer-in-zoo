@@ -319,9 +319,7 @@ impl<T: Trait> Module<T> {
 	fn do_stop_auction(auction: &mut Auction<T>) -> Result {
 		// call settle func if needed.
 		if auction.status != AuctionStatus::PendingStart {
-			if let Err(x) = Self::do_settle_auction(auction.id) {
-				return Err(x);
-			}
+			Self::do_settle_auction(auction.id)?;
 		}
 
 		// change status of auction
