@@ -547,7 +547,7 @@ impl<T: Trait> Module<T> {
 	fn do_query_one_auction(
 		auction: T::AuctionId,
 		sender: T::AccountId
-	) -> result::Result<(), &'static str> {
+	) -> result::Result<DetailAuction<T>, &'static str> {
 		let one_auction = Self::auctions(auction);
 		let sender_bid = Self::auction_bids(auction, sender.clone());
 		let account_ids = Self::action_participants(auction).unwrap();
@@ -566,9 +566,10 @@ impl<T: Trait> Module<T> {
 				auction: auction,
 				is_participate: is_bool,
 				participate_price: sender_bid,
-			}
+			};
+			return Ok(detail_auction);
 		}
-		Ok(())
+		Err("query fail")
 	}
 }
 
