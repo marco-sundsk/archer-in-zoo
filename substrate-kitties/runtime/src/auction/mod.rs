@@ -10,7 +10,7 @@ use sr_primitives::transaction_validity::{
 use rstd::result;
 use support::dispatch::Result;
 use support::{
-	decl_module, decl_storage, decl_event, Parameter,
+	decl_module, decl_storage, decl_event, Parameter, ensure,
 	traits::{
 		LockableCurrency, Currency,
 		OnUnbalanced,
@@ -141,11 +141,87 @@ decl_module! {
 			Ok(())
 		}
 
-		pub fn pause_auction(origin, auction: T::AuctionId) -> Result {
+		// setup start and/or stop Moment, and wait_period after someone's bid
+		// add by sunhao 20191023
+		pub fn setup_moments(origin,
+			auction_id: T::AuctionId, 
+			start_at: Option<T::Moment>,  //起拍时间
+			stop_at: Option<T::Moment>,  //结束时间
+			wait_period: Option<T::Moment>  //竞价等待时间
+		) -> Result {
+			let sender = ensure_signed(origin)?;
+
+			// unwrap auction and ensure its status is PendingStart
+			let auction = Self::auctions(auction_id);
+			ensure!(auction.is_some(), "Auction does not exist");
+			let mut auction = auction.unwrap();
+			ensure!(auction.status == AuctionStatus::PendingStart, 
+				"Auction is already started or over.");
+			
+			// ensure only owner can call this
+			ensure!(auction.owner == sender, "Only owner can call this fn.");
+
+			// set moments into storage
+			if start_at.is_some() {
+				auction.start_at = start_at;
+			}
+			if stop_at.is_some() {
+				auction.stop_at = stop_at;
+			}
+			if wait_period.is_some() {
+				auction.wait_period = wait_period;
+			}
+				
 			Ok(())
 		}
 
-		pub fn resume_auction(origin, auction: T::AuctionId) -> Result {
+		// Owner can pause the auction when it is in active.
+		// add by sunhao 20191024
+		pub fn pause_auction(origin, auction_id: T::AuctionId) -> Result {
+			let sender = ensure_signed(origin)?;
+
+			// unwrap auction and ensure its status is Active
+			let auction = Self::auctions(auction_id);
+			ensure!(auction.is_some(), "Auction does not exist");
+			let mut auction = auction.unwrap();
+			ensure!(auction.status == AuctionStatus::Active, 
+				"Auction can NOT be paused now.");
+			
+			// ensure only owner can call this
+			ensure!(auction.owner == sender, "Only owner can call this fn.");
+
+			// change status of auction
+			auction.status = AuctionStatus::Paused;
+
+			// emit event
+			Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
+				AuctionStatus::Active, AuctionStatus::Paused));
+
+			Ok(())
+		}
+
+		// Owner can resume the auction paused before.
+		// add by sunhao 20191024
+		pub fn resume_auction(origin, auction_id: T::AuctionId) -> Result {
+			let sender = ensure_signed(origin)?;
+
+			// unwrap auction and ensure its status is Paused
+			let auction = Self::auctions(auction_id);
+			ensure!(auction.is_some(), "Auction does not exist");
+			let mut auction = auction.unwrap();
+			ensure!(auction.status == AuctionStatus::Paused, 
+				"Auction can NOT be resumed now.");
+			
+			// ensure only owner can call this
+			ensure!(auction.owner == sender, "Only owner can call this fn.");
+
+			// change status of auction
+			auction.status = AuctionStatus::Active;
+
+			// emit event
+			Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
+				AuctionStatus::Paused, AuctionStatus::Active));
+
 			Ok(())
 		}
 
@@ -157,12 +233,27 @@ decl_module! {
 			Ok(())
 		}
 
+		// owner can stop an active or paused auction by his will.
+		// add by sunhao 20191024
 		pub fn stop_auction(
 			origin,
-			auction: T::AuctionId,
-			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
-		) -> Result { // Called by offchain worker
-			Ok(())
+			auction_id: T::AuctionId //,
+			// signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
+		) -> Result {
+			let sender = ensure_signed(origin)?;
+
+			// unwrap auction and ensure its status is not stopped yet.
+			let auction = Self::auctions(auction_id);
+			ensure!(auction.is_some(), "Auction does not exist");
+			let mut auction = auction.unwrap();
+			ensure!(auction.status != AuctionStatus::Stopped,
+				"Auction can NOT be stopped now.");
+			
+			// ensure only owner can call this
+			ensure!(auction.owner == sender, "Only owner can call this fn.");
+
+			Self::do_stop_auction(&mut auction)
+
 		}
 
 		pub fn participate_auction(
@@ -221,6 +312,25 @@ impl<T: Trait> Module<T> {
 		};
 		Self::insert_auction(owner, auction_id, new_auction);
 		Ok(auction_id)
+	}
+
+	// real work for stopping a auction.
+	// added by sunhao 20191024
+	fn do_stop_auction(auction: &mut Auction<T>) -> Result {
+		// call settle func if needed.
+		if auction.status != AuctionStatus::PendingStart {
+			Self::do_settle_auction(auction.id)?;
+		}
+
+		// change status of auction
+		let old_status = auction.status;
+		auction.status = AuctionStatus::Stopped;
+		
+		// emit event
+		Self::deposit_event(RawEvent::AuctionUpdated(auction.id, 
+			old_status, AuctionStatus::Stopped));
+		
+		Ok(())
 	}
 
 	fn do_enable_auction(auction: T::AuctionId) -> Result {
