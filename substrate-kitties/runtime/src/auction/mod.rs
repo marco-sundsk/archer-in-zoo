@@ -251,19 +251,8 @@ decl_module! {
 			// ensure only owner can call this
 			ensure!(auction.owner == sender, "Only owner can call this fn.");
 
-			// call settle func if needed.
-			if auction.status != AuctionStatus::PendingStart {
-				Self::do_settle_auction(auction_id);
-			}
+			Self::do_stop_auction(&mut auction)
 
-			// change status of auction
-			auction.status = AuctionStatus::Stopped;
-			
-			// emit event
-			Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
-				AuctionStatus::Paused, AuctionStatus::Active));
-			
-			Ok(())
 		}
 
 		pub fn participate_auction(
@@ -317,6 +306,27 @@ impl<T: Trait> Module<T> {
 		};
 		Self::insert_auction(owner, auction_id, new_auction);
 		Ok(auction_id)
+	}
+
+	// real work for stopping a auction.
+	// added by sunhao 20191024
+	fn do_stop_auction(auction: &mut Auction<T>) -> Result {
+		// call settle func if needed.
+		if auction.status != AuctionStatus::PendingStart {
+			if let Err(x) = Self::do_settle_auction(auction.id) {
+				return Err(x);
+			}
+		}
+
+		// change status of auction
+		let old_status = auction.status;
+		auction.status = AuctionStatus::Stopped;
+		
+		// emit event
+		Self::deposit_event(RawEvent::AuctionUpdated(auction.id, 
+			old_status, AuctionStatus::Stopped));
+		
+		Ok(())
 	}
 
 	fn do_enable_auction(auction: T::AuctionId) -> Result {
