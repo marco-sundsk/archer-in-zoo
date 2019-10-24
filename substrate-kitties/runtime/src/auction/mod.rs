@@ -225,14 +225,6 @@ decl_module! {
 			Ok(())
 		}
 
-		pub fn start_auction(
-			origin,
-			auction: T::AuctionId,
-			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
-		) -> Result { // Called by offchain worker
-			Ok(())
-		}
-
 		// owner can stop an active or paused auction by his will.
 		// add by sunhao 20191024
 		pub fn stop_auction(
@@ -260,6 +252,27 @@ decl_module! {
 			origin,
 			auction: T::AuctionId,
 			price: BalanceOf<T>
+		) -> Result {
+			Ok(())
+		}
+
+		// ===== passive method =====
+		// starting auction methods
+		// Called by offchain worker
+		fn start_auction_passive(
+			origin,
+			auction: T::AuctionId,
+			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
+		) -> Result {
+			Ok(())
+		}
+
+		// stoping auction methods
+		// Called by offchain worker
+		fn stop_auction_passive(
+			origin,
+			auction: T::AuctionId,
+			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
 		) -> Result {
 			Ok(())
 		}
