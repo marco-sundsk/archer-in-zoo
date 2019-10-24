@@ -76,7 +76,7 @@ pub enum AuctionStatus {
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Auction<T> where T: Trait {
 	id: T::AuctionId,
-	item: T::ItemId, // 拍卖物品id
+	item: Option<T::ItemId>, // 拍卖物品id
 	owner: T::AccountId, // 拍卖管理账户，可以控制暂停和继续
 	start_at: Option<T::Moment>, // 自动开始时间
 	stop_at: Option<T::Moment>, // 截止时间
@@ -321,7 +321,7 @@ impl<T: Trait> Module<T> {
 		let auction_id = Self::get_next_auction_id()?;
 		let new_auction = Auction {
 			id: auction_id,
-			item: 0.into(), // 拍卖物品id
+			item: None, // 拍卖物品id
 			owner: (*owner).clone(), // 拍卖管理账户，可以控制暂停和继续
 			begin_price: begin_price, // 起拍价
 			minimum_step: minimum_step, // 最小加价幅度
@@ -349,7 +349,7 @@ impl<T: Trait> Module<T> {
 			// ensure only owner can call this
 			ensure!(auction.owner == *sender, "Only owner can call this fn.");
 			// change status of auction
-			auction.item = item;
+			auction.item = Some(item);
 			<Auctions<T>>::insert(auction_id, auction);
 			Ok(())
 	}
