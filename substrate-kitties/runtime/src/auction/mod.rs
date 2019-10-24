@@ -12,6 +12,7 @@ use support::dispatch::Result;
 use support::{
 	decl_module, decl_storage, decl_event, Parameter, ensure, print,
 	traits::{
+		LockIdentifier, WithdrawReasons,
 		LockableCurrency, Currency,
 		OnUnbalanced,
 	}
@@ -21,6 +22,8 @@ use system::offchain::SubmitUnsignedTransaction;
 use codec::{Encode, Decode};
 use rstd::vec::Vec;
 use crate::traits::ItemTransfer;
+
+const AUCTION_ID: LockIdentifier = *b"auction ";
 
 /// The module's configuration trait.
 pub trait Trait: timestamp::Trait + aura::Trait {
@@ -41,7 +44,7 @@ pub trait Trait: timestamp::Trait + aura::Trait {
 		+ Copy;
 
 	/// Currency type for this module.
-	type Currency: LockableCurrency<Self::AccountId>;
+	type Currency: LockableCurrency<Self::AccountId, Moment = Self::BlockNumber>;
 
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
@@ -104,7 +107,7 @@ decl_storage! {
 		AuctionItems get(fn auction_items): map T::ItemId => Option<T::AuctionId>;
 		Auctions get(fn auctions): map T::AuctionId => Option<Auction<T>>;
 		AuctionBids get(fn auction_bids): double_map T::AuctionId, twox_128(T::AccountId) => BalanceOf<T>;
-		AuctionParticipants get(fn action_participants): map T::AuctionId => Option<Vec<T::AccountId>>;
+		AuctionParticipants get(fn auction_participants): map T::AuctionId => Option<Vec<T::AccountId>>;
 
 		// Auction workinig list
 		PendingAuctions get(fn pending_auctions): Vec<T::AuctionId>; // 尚未开始的auction
@@ -278,9 +281,38 @@ decl_module! {
 
 		pub fn participate_auction(
 			origin,
-			auction: T::AuctionId,
+			auction_id: T::AuctionId,
 			price: BalanceOf<T>
 		) -> Result {
+            let participant = ensure_signed(origin)?;
+
+            let auction = Self::auctions(auction_id);
+            ensure!(auction.is_some(), "Auction does not exist");
+            let mut auction = auction.unwrap();
+            ensure!(auction.status == AuctionStatus::Active,
+                "Auction not activated");
+            match auction.latest_participate {
+                Some((_account, _moment)) => { // 已经有用户出价
+                    let bid_price = <AuctionBids<T>>::get(auction.id, _account);
+                    ensure!(price > bid_price + auction.minimum_step, "Increment of bid price less than minimum step ");
+                },
+                _ => {}, // 尚无用户出价
+            };
+
+			let mut delta_price = price;
+            if <AuctionBids<T>>::exists(auction.id, &participant) { // 已经参与过的用户再次出价
+				let prev_bid = <AuctionBids<T>>::get(auction.id, &participant);
+				delta_price = price - prev_bid;
+			}
+
+			ensure!(delta_price < T::Currency::free_balance(&participant), "No enough balance to lock");
+
+			Self::do_lock_balance(&participant, price)?;
+			Self::do_participate_auction(&auction_id, &participant, price)?;
+			
+			// emit event
+			Self::deposit_event(RawEvent::BidderUpdated(auction_id, 
+				participant, price, 0));
 			Ok(())
 		}
 
@@ -443,6 +475,49 @@ impl<T: Trait> Module<T> {
 	}
 
 	fn do_settle_auction(auction: T::AuctionId) -> Result {
+        Ok(())
+    }
+
+	fn do_enable_auction(auction: T::AuctionId) -> Result {
+		Ok(())
+	}
+
+	fn do_lock_balance(account: &T::AccountId, price: BalanceOf<T>) -> Result {
+		T::Currency::extend_lock(
+				AUCTION_ID,
+				account,
+				price,
+				<T as system::Trait>::BlockNumber::max_value(),
+				WithdrawReasons::none());
+		Ok(())
+	}
+
+	fn do_participate_auction(auction: &T::AuctionId, account: &T::AccountId, price: BalanceOf<T>) -> Result {
+		<Auctions<T>>::mutate(auction, |a|{
+				if let Some(auc) = a {
+					auc.latest_participate = Option::Some((account.clone(), <aura::Module<T>>::last()));
+				}
+			});
+
+		<AuctionBids<T>>::insert(
+			auction,
+			account,
+			&price
+		);
+
+		let mut participants;
+		if let Some(p) = Self::auction_participants(auction) {
+			participants = p;
+		} else {
+			participants = Vec::<T::AccountId>::new();
+		}
+
+		if ! participants.contains(account) {
+			participants.push(account.clone());
+		}
+
+		<AuctionParticipants<T>>::insert(auction, participants);
+
 		Ok(())
 	}
 
