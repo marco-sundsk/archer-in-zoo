@@ -1,6 +1,6 @@
 use sr_primitives::{RuntimeAppPublic, RuntimeDebug};
 use sr_primitives::traits::{
-	SimpleArithmetic, Member, Bounded, Zero,
+	SimpleArithmetic, Member, Bounded, Zero, One,
 	Printable,
 	CheckedAdd, CheckedSub,
 };
@@ -12,8 +12,8 @@ use support::dispatch::Result;
 use support::{
 	decl_module, decl_storage, decl_event, Parameter, ensure, print, debug,
 	traits::{
-		LockIdentifier, WithdrawReasons,
-		LockableCurrency, Currency,
+		LockIdentifier, WithdrawReasons, WithdrawReason,
+		LockableCurrency, Currency, ExistenceRequirement,
 		OnUnbalanced,
 	}
 };
@@ -345,7 +345,7 @@ decl_module! {
 					if let Some(auction) = Self::auctions(auction_id) {
 						// call settle func if needed.
 						if auction.status != AuctionStatus::PendingStart {
-							match Self::do_settle_auction(*auction_id) {
+							match Self::do_settle_auction(&auction) {
 								Err(_) => {}, // DO SOMETHING?
 								Ok(_) => {},
 							}
@@ -633,7 +633,7 @@ impl<T: Trait> Module<T> {
 
 		// call settle func if needed.
 		if auction.status != AuctionStatus::PendingStart {
-			Self::do_settle_auction(auction_id)?;
+			Self::do_settle_auction(&auction)?;
 		}
 
 		// change status of auction
@@ -645,16 +645,51 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	fn do_settle_auction(auction: T::AuctionId) -> Result {
-		// TODO transfer auction item
+	fn do_settle_auction(auction: &Auction<T>) -> Result {
+		// unlock all participents' balance
+		if let Some(participants) = <AuctionParticipants<T>>::get(auction.id) {
+			participants.iter().try_for_each(|account| {
+				Self::do_unlock_balance(&auction.id, account)
+			})?;
+		}
 
-		// TODO unlock all participents' balance
+		// handle winner
+		let owner = &auction.owner;
+		// transfer auction item to winner
+		if let Some(item_id) = auction.item {
+			if let Some((winner, _)) = &auction.latest_participate {
+				let winner_bid = <AuctionBids<T>>::get(&auction.id, winner);
+				let (tranfer_value, fee) = Self::_calc_auctino_fee(winner_bid);
 
-		// TODO transfer auction balance
+				// FIXME: first ensure then modify store
+				// withdraw imbalance
+				let fee_imbalance = T::Currency::withdraw(
+					winner,
+					fee,
+					WithdrawReason::Fee,
+					ExistenceRequirement::KeepAlive
+				)?;
+				// transfer auction balance
+				T::Currency::transfer(winner, owner, tranfer_value)?;
 
-		// TODO trigger imbalance interface
+				// try transfer item
+				T::AuctionTransfer::transfer_item(owner, winner, item_id)?;
+
+				// trigger imbalance interface
+				T::OnAuctionPayment::on_unbalanced(fee_imbalance);
+			}
+		}
 
 		Ok(())
+	}
+
+	/// FIXME using configable ratio
+	/// return transfer value and fee
+	fn _calc_auctino_fee (
+		price: BalanceOf<T>
+	) -> (BalanceOf<T>, BalanceOf<T>) {
+		let fee = (price / 20.into()).min(One::one());
+		(price - fee, fee)
 	}
 
 	fn do_lock_balance(auction: &T::AuctionId, account: &T::AccountId, balance: BalanceOf<T>) -> Result {
@@ -697,7 +732,8 @@ impl<T: Trait> Module<T> {
 			let mut global_lock = Self::account_locks(account);
 			ensure!(global_lock >= auction_lock, "fatal error, global lock less than auction lock");
 			
-			<AuctionBids<T>>::remove(auction, account);
+			// [No need remove, (commented by Tang)]
+			// <AuctionBids<T>>::remove(auction, account);
 			global_lock = global_lock.checked_sub(&auction_lock).ok_or("balance sub overflow")?;
 			// 调用锁仓接口
 			if global_lock == Zero::zero() {
