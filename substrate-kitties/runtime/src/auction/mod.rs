@@ -12,6 +12,7 @@ use support::dispatch::Result;
 use support::{
 	decl_module, decl_storage, decl_event, Parameter, ensure, print,
 	traits::{
+		LockIdentifier, WithdrawReasons,
 		LockableCurrency, Currency,
 		OnUnbalanced,
 	}
@@ -21,6 +22,8 @@ use system::offchain::SubmitUnsignedTransaction;
 use codec::{Encode, Decode};
 use rstd::vec::Vec;
 use crate::traits::ItemTransfer;
+
+const AUCTION_ID: LockIdentifier = *b"auction ";
 
 /// The module's configuration trait.
 pub trait Trait: timestamp::Trait + aura::Trait {
@@ -41,7 +44,7 @@ pub trait Trait: timestamp::Trait + aura::Trait {
 		+ Copy;
 
 	/// Currency type for this module.
-	type Currency: LockableCurrency<Self::AccountId>;
+	type Currency: LockableCurrency<Self::AccountId, Moment = Self::BlockNumber>;
 
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
@@ -76,7 +79,7 @@ pub enum AuctionStatus {
 #[cfg_attr(feature = "std", derive(Debug))]
 pub struct Auction<T> where T: Trait {
 	id: T::AuctionId,
-	item: T::ItemId, // 拍卖物品id
+	item: Option<T::ItemId>, // 拍卖物品id
 	owner: T::AccountId, // 拍卖管理账户，可以控制暂停和继续
 	start_at: Option<T::Moment>, // 自动开始时间
 	stop_at: Option<T::Moment>, // 截止时间
@@ -86,6 +89,13 @@ pub struct Auction<T> where T: Trait {
 	minimum_step: BalanceOf<T>, // 最小加价幅度
 	latest_participate: Option<(T::AccountId, T::Moment)>, // 最后出价人/时间
 	status: AuctionStatus,
+}
+#[derive(Encode, Decode, Clone, PartialEq)]
+#[cfg_attr(feature = "std", derive(Debug))]
+pub struct DetailAuction<T> where T: Trait {
+	auction: Auction<T>,//
+	is_participate: bool,//是否参与
+	participate_price: BalanceOf<T>,//参与的最新出价
 }
 
 // This module's storage items.
@@ -97,7 +107,7 @@ decl_storage! {
 		AuctionItems get(fn auction_items): map T::ItemId => Option<T::AuctionId>;
 		Auctions get(fn auctions): map T::AuctionId => Option<Auction<T>>;
 		AuctionBids get(fn auction_bids): double_map T::AuctionId, twox_128(T::AccountId) => BalanceOf<T>;
-		AuctionParticipants get(fn action_participants): map T::AuctionId => Option<Vec<T::AccountId>>;
+		AuctionParticipants get(fn auction_participants): map T::AuctionId => Option<Vec<T::AccountId>>;
 
 		// Auction workinig list
 		PendingAuctions get(fn pending_auctions): Vec<T::AuctionId>; // 尚未开始的auction
@@ -271,9 +281,38 @@ decl_module! {
 
 		pub fn participate_auction(
 			origin,
-			auction: T::AuctionId,
+			auction_id: T::AuctionId,
 			price: BalanceOf<T>
 		) -> Result {
+            let participant = ensure_signed(origin)?;
+
+            let auction = Self::auctions(auction_id);
+            ensure!(auction.is_some(), "Auction does not exist");
+            let mut auction = auction.unwrap();
+            ensure!(auction.status == AuctionStatus::Active,
+                "Auction not activated");
+            match auction.latest_participate {
+                Some((_account, _moment)) => { // 已经有用户出价
+                    let bid_price = <AuctionBids<T>>::get(auction.id, _account);
+                    ensure!(price > bid_price + auction.minimum_step, "Increment of bid price less than minimum step ");
+                },
+                _ => {}, // 尚无用户出价
+            };
+
+			let mut delta_price = price;
+            if <AuctionBids<T>>::exists(auction.id, &participant) { // 已经参与过的用户再次出价
+				let prev_bid = <AuctionBids<T>>::get(auction.id, &participant);
+				delta_price = price - prev_bid;
+			}
+
+			ensure!(delta_price < T::Currency::free_balance(&participant), "No enough balance to lock");
+
+			Self::do_lock_balance(&participant, price)?;
+			Self::do_participate_auction(&auction_id, &participant, price)?;
+			
+			// emit event
+			Self::deposit_event(RawEvent::BidderUpdated(auction_id, 
+				participant, price, 0));
 			Ok(())
 		}
 
@@ -296,6 +335,15 @@ decl_module! {
 			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
 		) -> Result {
 			Ok(())
+		}
+		
+		//query one auction with auctionId
+		pub fn query_one_auction(
+			origin,
+			auction: T::AuctionId,
+			) {
+			let sender = ensure_signed(origin)?;
+			Self::do_query_one_auction(auction, sender.clone())?;
 		}
 
 		// Runs after every block.
@@ -367,7 +415,7 @@ impl<T: Trait> Module<T> {
 		let auction_id = Self::get_next_auction_id()?;
 		let new_auction = Auction {
 			id: auction_id,
-			item: 0.into(), // 拍卖物品id
+			item: None, // 拍卖物品id
 			owner: (*owner).clone(), // 拍卖管理账户，可以控制暂停和继续
 			begin_price: begin_price, // 起拍价
 			minimum_step: minimum_step, // 最小加价幅度
@@ -395,7 +443,7 @@ impl<T: Trait> Module<T> {
 			// ensure only owner can call this
 			ensure!(auction.owner == *sender, "Only owner can call this fn.");
 			// change status of auction
-			auction.item = item;
+			auction.item = Some(item);
 			<Auctions<T>>::insert(auction_id, auction);
 			Ok(())
 	}
@@ -427,6 +475,49 @@ impl<T: Trait> Module<T> {
 	}
 
 	fn do_settle_auction(auction: T::AuctionId) -> Result {
+        Ok(())
+    }
+
+	fn do_enable_auction(auction: T::AuctionId) -> Result {
+		Ok(())
+	}
+
+	fn do_lock_balance(account: &T::AccountId, price: BalanceOf<T>) -> Result {
+		T::Currency::extend_lock(
+				AUCTION_ID,
+				account,
+				price,
+				<T as system::Trait>::BlockNumber::max_value(),
+				WithdrawReasons::none());
+		Ok(())
+	}
+
+	fn do_participate_auction(auction: &T::AuctionId, account: &T::AccountId, price: BalanceOf<T>) -> Result {
+		<Auctions<T>>::mutate(auction, |a|{
+				if let Some(auc) = a {
+					auc.latest_participate = Option::Some((account.clone(), <aura::Module<T>>::last()));
+				}
+			});
+
+		<AuctionBids<T>>::insert(
+			auction,
+			account,
+			&price
+		);
+
+		let mut participants;
+		if let Some(p) = Self::auction_participants(auction) {
+			participants = p;
+		} else {
+			participants = Vec::<T::AccountId>::new();
+		}
+
+		if ! participants.contains(account) {
+			participants.push(account.clone());
+		}
+
+		<AuctionParticipants<T>>::insert(auction, participants);
+
 		Ok(())
 	}
 
@@ -526,6 +617,34 @@ impl<T: Trait> Module<T> {
 	fn send_auction_stop_tx(auction_ids: Vec<T::AuctionId>) -> Result {
 		// TODO
 		Ok(())
+	}
+	
+	fn do_query_one_auction(
+		auction: T::AuctionId,
+		sender: T::AccountId
+	) -> result::Result<DetailAuction<T>, &'static str> {
+		let one_auction = Self::auctions(auction);
+		let sender_bid = Self::auction_bids(auction, sender.clone());
+		let account_ids = Self::action_participants(auction).unwrap();
+		let mut is_bool: bool = false;
+
+		ensure!(one_auction.is_some(), "One invalid auction");
+
+		let detail_auction :DetailAuction<T>;
+		if let Some(auction) = one_auction{
+			for i in &account_ids {
+				if let i = sender.clone() {
+					is_bool = true;
+				}
+			}
+			detail_auction = DetailAuction {
+				auction: auction,
+				is_participate: is_bool,
+				participate_price: sender_bid,
+			};
+			return Ok(detail_auction);
+		}
+		Err("query fail")
 	}
 }
 
