@@ -135,6 +135,9 @@ decl_storage! {
 	trait Store for Module<T: Trait> as Auction {
 		NextAuctionId get(fn next_auction_id): T::AuctionId;
 		
+		// 记录账户全局lock的余额数量，不同auction中lock的余额汇总在这里
+		AccountLocks get(fn account_locks): map T::AccountId => BalanceOf<T>;
+
 		// 物品id映射auctionid，一个物品只能在一个auction中参拍，创建auction后添加映射，auction结束后删除映射
 		AuctionItems get(fn auction_items): map T::ItemId => Option<T::AuctionId>;
 		Auctions get(fn auctions): map T::AuctionId => Option<Auction<T>>;
@@ -261,7 +264,7 @@ decl_module! {
 
 			ensure!(delta_price < T::Currency::free_balance(&participant), "No enough balance to lock");
 
-			Self::do_lock_balance(&participant, price)?;
+			Self::do_lock_balance(&auction_id, &participant, delta_price)?;
 			Self::do_participate_auction(&auction_id, &participant, price)?;
 			
 			// emit event
@@ -536,18 +539,67 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	fn do_settle_auction(auction: T::AuctionId) -> Result {
-		// TODO auction done stuffs
+	fn do_lock_balance(auction: &T::AuctionId, account: &T::AccountId, balance: BalanceOf<T>) -> Result {
+		// 账户在auction下锁定一些资产，如果已经锁过，这里会追加锁仓， balance是追价的delta部分
+
+		// 增加全局锁仓
+		let mut global_lock = balance;
+		if <AccountLocks<T>>::exists(account) {
+			global_lock += Self::account_locks(account)
+		}
+		<AccountLocks<T>>::insert(account, global_lock);
+		
+		// 增加auction下锁仓
+		let mut auction_lock = balance;
+		if <AuctionBids<T>>::exists(auction, account) {
+			auction_lock += Self::auction_bids(auction, account);
+		}
+		<AuctionBids<T>>::insert(auction, account, auction_lock);
+
+		// 调用锁仓接口
+		T::Currency::extend_lock(
+			AUCTION_ID,
+			account,
+			global_lock,
+			<T as system::Trait>::BlockNumber::max_value(),
+			WithdrawReasons::none());
+	
 		Ok(())
 	}
 
-	fn do_lock_balance(account: &T::AccountId, price: BalanceOf<T>) -> Result {
-		T::Currency::extend_lock(
-				AUCTION_ID,
-				account,
-				price,
-				<T as system::Trait>::BlockNumber::max_value(),
-				WithdrawReasons::none());
+	fn do_unlock_balance(auction: &T::AuctionId, account: &T::AccountId) -> Result {
+		// 解锁账户在auction下锁定的所有资产
+
+		// 获取用户在auction下的锁仓
+		if <AuctionBids<T>>::exists(auction, account) {
+			let auction_lock = Self::auction_bids(auction, account);
+
+			// 获取用户全局锁仓
+			ensure!(<AccountLocks<T>>::exists(account), "fatal error, can not find global lock for account");
+			let mut global_lock = Self::account_locks(account);
+			ensure!(global_lock >= auction_lock, "fatal error, global lock less than auction lock");
+			
+			<AuctionBids<T>>::remove(auction, account);
+			global_lock -= auction_lock;
+			// 调用锁仓接口
+			if global_lock == Zero::zero() {
+				<AccountLocks<T>>::remove(account);
+				T::Currency::remove_lock(AUCTION_ID, account);
+			} else {
+				<AccountLocks<T>>::insert(account, global_lock);
+				T::Currency::set_lock(
+					AUCTION_ID,
+					account,
+					global_lock,
+					<T as system::Trait>::BlockNumber::max_value(),
+					WithdrawReasons::none());
+			}
+		}
+		Ok(())
+	}
+
+	fn do_settle_auction(auction: T::AuctionId) -> Result {
+		// TODO auction done stuffs
 		Ok(())
 	}
 
@@ -557,12 +609,6 @@ impl<T: Trait> Module<T> {
 					auc.latest_participate = Option::Some((account.clone(), <aura::Module<T>>::last()));
 				}
 			});
-
-		<AuctionBids<T>>::insert(
-			auction,
-			account,
-			&price
-		);
 
 		let mut participants;
 		if let Some(p) = Self::auction_participants(auction) {
