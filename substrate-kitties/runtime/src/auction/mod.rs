@@ -10,7 +10,7 @@ use sr_primitives::transaction_validity::{
 use rstd::result;
 use support::dispatch::Result;
 use support::{
-	decl_module, decl_storage, decl_event, Parameter, ensure, print,
+	decl_module, decl_storage, decl_event, Parameter, ensure, print, debug,
 	traits::{
 		LockIdentifier, WithdrawReasons,
 		LockableCurrency, Currency,
@@ -130,6 +130,12 @@ pub struct Auction<T> where T: Trait {
 // 	participate_price: BalanceOf<T>,//参与的最新出价
 // }
 
+// helper enum for auction_ids vec
+enum StoreVecs {
+	PendingVec,
+	ActiveVec
+}
+
 // This module's storage items.
 decl_storage! {
 	trait Store for Module<T: Trait> as Auction {
@@ -236,8 +242,6 @@ decl_module! {
 			let sender = ensure_signed(origin)?;
 
 			Self::do_stop_auction(&sender, auction_id)?;
-			// remove from active vecs
-			Self::remove_from_active(auction_id);
 			
 			Ok(())
 		}
@@ -310,9 +314,10 @@ decl_module! {
 				auction_ids.iter().for_each(|auction_id| {
 					Self::_change_auction_status(*auction_id, AuctionStatus::PendingStart, AuctionStatus::Active);
 				});
-				// TODO remove auction_ids from pendings
-
-				// TODO add auction_ids to active_auctions
+				// remove auction_ids from pendings
+				Self::remove_all_from_set(StoreVecs::PendingVec, &auction_ids);
+				// add auction_ids to active_auctions
+				Self::add_all_to_set(StoreVecs::ActiveVec, &auction_ids);
 
 				Ok(())
 			} else {
@@ -345,7 +350,8 @@ decl_module! {
 						Self::_change_auction_status(*auction_id, auction.status, AuctionStatus::Stopped);
 					}
 				});
-				// TODO remove auction_ids from active_auctions
+				// remove auction_ids from active_auctions
+				Self::remove_all_from_set(StoreVecs::ActiveVec, &auction_ids);
 
 				Ok(())
 			} else {
@@ -355,6 +361,8 @@ decl_module! {
 		
 		// Runs after every block.
 		fn offchain_worker(now: <T as system::Trait>::BlockNumber) {
+			debug::RuntimeLogger::init();
+
 			// Only send messages if we are a potential validator.
 			if runtime_io::is_validator() {
 				Self::offchain(now);
@@ -434,38 +442,52 @@ impl<T: Trait> Module<T> {
 		Ok(auction)
 	}
 
-	// add an auction to pending vec, if it is not in there yet.
-	// add by sunhao 20191024
-	fn add2pendings(auction_id: T::AuctionId) {
-		let mut pending_auctions = Self::pending_auctions();
-		let mut flag = false;
-		for elem in pending_auctions.iter() {
-			if *elem == auction_id {
-				flag = true;
-				break;
+	/// add auction ids to a store vec set.
+	/// add by sunhao 20191024
+	/// modified by Tang 20191025
+	fn add_all_to_set(vec_type: StoreVecs, auction_ids: &Vec<T::AuctionId>) {
+		let mut stored_auction_ids = match vec_type {
+			StoreVecs::PendingVec => Self::pending_auctions(),
+			StoreVecs::ActiveVec => Self::active_auctions(),
+		};
+		// add to set
+		for auction_id in auction_ids.iter() {
+			let exists = stored_auction_ids.iter().all(|auc_id| auc_id != auction_id);
+			if !exists {
+				stored_auction_ids.push(*auction_id);
 			}
 		}
-		if !flag {
-			pending_auctions.push(auction_id);
-			<PendingAuctions<T>>::put(pending_auctions);
-		}
+		// save to store
+		match vec_type {
+			StoreVecs::PendingVec => <PendingAuctions<T>>::put(stored_auction_ids),
+			StoreVecs::ActiveVec => <ActiveAuctions<T>>::put(stored_auction_ids),
+		};
 	}
 
-	// remove an auction from active vec.
-	// add by sunhao 20191024
-	fn remove_from_active(auction_id: T::AuctionId) {
-		let mut active_auctions = Self::active_auctions();
-		let mut index = active_auctions.len();
-		for (i, elem) in active_auctions.iter().enumerate() {
-			if *elem == auction_id {
-				index = i;
-				break;
-			}
+	/// remove an auction from a store vec set.
+	/// add by sunhao 20191024
+	/// modified by Tang 20191025
+	fn remove_all_from_set(vec_type: StoreVecs, auction_ids: &Vec<T::AuctionId>) {
+		let mut stored_auction_ids = match vec_type {
+			StoreVecs::PendingVec => Self::pending_auctions(),
+			StoreVecs::ActiveVec => Self::active_auctions(),
+		};
+		// remove from set
+		for auction_id in auction_ids.iter() {
+			stored_auction_ids = stored_auction_ids.iter()
+				.filter_map(|auc_id| if auc_id == auction_id {
+					None
+				} else {
+					Some(*auc_id)
+				})
+				.collect();
 		}
-		if index != active_auctions.len() {
-			active_auctions.remove(index);
-			<ActiveAuctions<T>>::put(active_auctions);
-		}
+		
+		// save to store
+		match vec_type {
+			StoreVecs::PendingVec => <PendingAuctions<T>>::put(stored_auction_ids),
+			StoreVecs::ActiveVec => <ActiveAuctions<T>>::put(stored_auction_ids),
+		};
 	}
 
 	fn insert_auction(auction_id: T::AuctionId, auction:Auction<T>) {
@@ -541,7 +563,7 @@ impl<T: Trait> Module<T> {
 		<Auctions<T>>::insert(auction_id, auction);
 
 		// ensure this auction in pending queue, once owner call this fn.
-		Self::add2pendings(auction_id);
+		Self::add_all_to_set(StoreVecs::PendingVec,  &vec![auction_id]);
 			
 		Ok(())
 	}
@@ -614,6 +636,9 @@ impl<T: Trait> Module<T> {
 		// change status of auction
 		Self::_change_auction_status(auction_id, auction.status, AuctionStatus::Stopped);
 		
+		// remove from active vecs
+		Self::remove_all_from_set(StoreVecs::ActiveVec, &vec![auction_id]);
+
 		Ok(())
 	}
 
