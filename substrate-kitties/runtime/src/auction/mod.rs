@@ -1,8 +1,8 @@
 use sr_primitives::{RuntimeAppPublic, RuntimeDebug};
 use sr_primitives::traits::{
-	SimpleArithmetic, Member, Bounded, One, Zero,
+	SimpleArithmetic, Member, Bounded, Zero,
 	Printable,
-	CheckedAdd, CheckedSub, Saturating, SaturatedConversion,
+	CheckedAdd, CheckedSub,
 };
 use sr_primitives::transaction_validity::{
 	TransactionValidity, TransactionLongevity, ValidTransaction, InvalidTransaction,
@@ -275,9 +275,6 @@ decl_module! {
 			Self::do_lock_balance(&auction_id, &participant, delta_price)?;
 			Self::do_participate_auction(&auction_id, &participant, price)?;
 			
-			// emit event
-			Self::deposit_event(RawEvent::BidderUpdated(auction_id, 
-				participant, price, 0));
 			Ok(())
 		}
 
@@ -649,7 +646,14 @@ impl<T: Trait> Module<T> {
 	}
 
 	fn do_settle_auction(auction: T::AuctionId) -> Result {
-		// TODO auction done stuffs
+		// TODO transfer auction item
+
+		// TODO unlock all participents' balance
+
+		// TODO transfer auction balance
+
+		// TODO trigger imbalance interface
+
 		Ok(())
 	}
 
@@ -659,14 +663,14 @@ impl<T: Trait> Module<T> {
 		// 增加全局锁仓
 		let mut global_lock = balance;
 		if <AccountLocks<T>>::exists(account) {
-			global_lock += Self::account_locks(account)
+			global_lock = global_lock.checked_add(&Self::account_locks(account)).ok_or("balance add overflow")?;
 		}
 		<AccountLocks<T>>::insert(account, global_lock);
 		
 		// 增加auction下锁仓
 		let mut auction_lock = balance;
 		if <AuctionBids<T>>::exists(auction, account) {
-			auction_lock += Self::auction_bids(auction, account);
+			auction_lock = auction_lock.checked_add(&Self::auction_bids(auction, account)).ok_or("balance add overflow")?;
 		}
 		<AuctionBids<T>>::insert(auction, account, auction_lock);
 
@@ -694,7 +698,7 @@ impl<T: Trait> Module<T> {
 			ensure!(global_lock >= auction_lock, "fatal error, global lock less than auction lock");
 			
 			<AuctionBids<T>>::remove(auction, account);
-			global_lock -= auction_lock;
+			global_lock = global_lock.checked_sub(&auction_lock).ok_or("balance sub overflow")?;
 			// 调用锁仓接口
 			if global_lock == Zero::zero() {
 				<AccountLocks<T>>::remove(account);
@@ -712,25 +716,28 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	fn do_participate_auction(auction: &T::AuctionId, account: &T::AccountId, price: BalanceOf<T>) -> Result {
-		<Auctions<T>>::mutate(auction, |a|{
+	fn do_participate_auction(auction_id: &T::AuctionId, account: &T::AccountId, price: BalanceOf<T>) -> Result {
+		<Auctions<T>>::mutate(auction_id, |a|{
 				if let Some(auc) = a {
 					auc.latest_participate = Option::Some((account.clone(), <aura::Module<T>>::last()));
 				}
 			});
 
 		let mut participants;
-		if let Some(p) = Self::auction_participants(auction) {
+		if let Some(p) = Self::auction_participants(auction_id) {
 			participants = p;
 		} else {
 			participants = Vec::<T::AccountId>::new();
 		}
 
-		if ! participants.contains(account) {
+		if !participants.contains(account) {
 			participants.push(account.clone());
 		}
 
-		<AuctionParticipants<T>>::insert(auction, participants);
+		<AuctionParticipants<T>>::insert(auction_id, participants);
+
+		// emit event
+		Self::deposit_event(RawEvent::BidderUpdated(*auction_id, account.clone(), price, 0));
 
 		Ok(())
 	}
