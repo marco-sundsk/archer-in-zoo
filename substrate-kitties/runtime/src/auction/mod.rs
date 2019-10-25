@@ -346,7 +346,13 @@ decl_module! {
 				// set status as active
 				auction_ids.iter().for_each(|auction_id| {
 					if let Some(auction) = Self::auctions(auction_id) {
-						// TODO settle result
+						// call settle func if needed.
+						if auction.status != AuctionStatus::PendingStart {
+							match Self::do_settle_auction(*auction_id) {
+								Err(_) => {}, // DO SOMETHING?
+								Ok(_) => {},
+							}
+						}
 						Self::_change_auction_status(*auction_id, auction.status, AuctionStatus::Stopped);
 					}
 				});
