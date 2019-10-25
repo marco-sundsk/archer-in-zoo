@@ -1,8 +1,8 @@
-use sr_primitives::{RuntimeAppPublic};
+use sr_primitives::{RuntimeAppPublic, RuntimeDebug};
 use sr_primitives::traits::{
-	SimpleArithmetic, Member, One, Zero,
-	CheckedAdd, CheckedSub,
-	Saturating, Bounded, SaturatedConversion,
+	SimpleArithmetic, Member, Bounded, One, Zero,
+	Printable,
+	CheckedAdd, CheckedSub, Saturating, SaturatedConversion,
 };
 use sr_primitives::transaction_validity::{
 	TransactionValidity, TransactionLongevity, ValidTransaction, InvalidTransaction,
@@ -12,6 +12,7 @@ use support::dispatch::Result;
 use support::{
 	decl_module, decl_storage, decl_event, Parameter, ensure, print,
 	traits::{
+		LockIdentifier, WithdrawReasons,
 		LockableCurrency, Currency,
 		OnUnbalanced,
 	}
@@ -21,6 +22,26 @@ use system::offchain::SubmitUnsignedTransaction;
 use codec::{Encode, Decode};
 use rstd::vec::Vec;
 use crate::traits::ItemTransfer;
+
+const AUCTION_ID: LockIdentifier = *b"auction ";
+
+/// Error which may occur while executing the off-chain code.
+#[derive(RuntimeDebug)]
+enum OffchainErr {
+	MissingKey,
+	FailedSigning,
+	SubmitTransaction,
+}
+
+impl Printable for OffchainErr {
+	fn print(&self) {
+		match self {
+			OffchainErr::MissingKey => print("Offchain error: failed to find authority key"),
+			OffchainErr::FailedSigning => print("Offchain error: signing failed!"),
+			OffchainErr::SubmitTransaction => print("Offchain error: submitting transaction failed!"),
+		}
+	}
+}
 
 /// The module's configuration trait.
 pub trait Trait: timestamp::Trait + aura::Trait {
@@ -41,7 +62,7 @@ pub trait Trait: timestamp::Trait + aura::Trait {
 		+ Copy;
 
 	/// Currency type for this module.
-	type Currency: LockableCurrency<Self::AccountId>;
+	type Currency: LockableCurrency<Self::AccountId, Moment = Self::BlockNumber>;
 
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
@@ -62,6 +83,7 @@ pub trait Trait: timestamp::Trait + aura::Trait {
 pub type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
 type NegativeImbalanceOf<T> =
 	<<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::NegativeImbalance;
+type SignatureOf<T> = <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature;
 
 #[derive(Encode, Decode, Clone, Copy, Eq, PartialEq)]
 #[cfg_attr(feature = "std", derive(Debug))]
@@ -70,6 +92,18 @@ pub enum AuctionStatus {
 	Paused,
 	Active,
 	Stopped,
+}
+// method for error string
+impl AuctionStatus {
+	/// Whether this block is the new best block.
+	pub fn error_str(self) -> &'static str {
+		match self {
+			AuctionStatus::PendingStart => "Auction is already started or over.",
+			AuctionStatus::Paused => "Auction should be paused.",
+			AuctionStatus::Active => "Auction should be acive.",
+			AuctionStatus::Stopped => "Auction should be stopped.",
+		}
+	}
 }
 
 #[derive(Encode, Decode, Clone, PartialEq, Copy)]
@@ -87,13 +121,14 @@ pub struct Auction<T> where T: Trait {
 	latest_participate: Option<(T::AccountId, T::Moment)>, // 最后出价人/时间
 	status: AuctionStatus,
 }
-#[derive(Encode, Decode, Clone, PartialEq)]
-#[cfg_attr(feature = "std", derive(Debug))]
-pub struct DetailAuction<T> where T: Trait {
-	auction: Auction<T>,//
-	is_participate: bool,//是否参与
-	participate_price: BalanceOf<T>,//参与的最新出价
-}
+// No need [commented by Tang]
+// #[derive(Encode, Decode, Clone, PartialEq)]
+// #[cfg_attr(feature = "std", derive(Debug))]
+// pub struct DetailAuction<T> where T: Trait {
+// 	auction: Auction<T>,//
+// 	is_participate: bool,//是否参与
+// 	participate_price: BalanceOf<T>,//参与的最新出价
+// }
 
 // This module's storage items.
 decl_storage! {
@@ -104,7 +139,7 @@ decl_storage! {
 		AuctionItems get(fn auction_items): map T::ItemId => Option<T::AuctionId>;
 		Auctions get(fn auctions): map T::AuctionId => Option<Auction<T>>;
 		AuctionBids get(fn auction_bids): double_map T::AuctionId, twox_128(T::AccountId) => BalanceOf<T>;
-		AuctionParticipants get(fn action_participants): map T::AuctionId => Option<Vec<T::AccountId>>;
+		AuctionParticipants get(fn auction_participants): map T::AuctionId => Option<Vec<T::AccountId>>;
 
 		// Auction workinig list
 		PendingAuctions get(fn pending_auctions): Vec<T::AuctionId>; // 尚未开始的auction
@@ -154,11 +189,12 @@ decl_module! {
 			item: T::ItemId,//竞拍对象
 		) -> Result {
 			let sender = ensure_signed(origin)?;
-			Self::do_add_item(&sender, auction_id,item)?;
-			Ok(())
+
+			Self::do_add_item(&sender, auction_id,item)
 		}
 		// setup start and/or stop Moment, and wait_period after someone's bid
 		// add by sunhao 20191023
+		// separated by Tang 20191024
 		pub fn setup_moments(origin,
 			auction_id: T::AuctionId, 
 			start_at: Option<T::Moment>,  //起拍时间
@@ -167,122 +203,82 @@ decl_module! {
 		) -> Result {
 			let sender = ensure_signed(origin)?;
 
-			// unwrap auction and ensure its status is PendingStart
-			let auction = Self::auctions(auction_id);
-			ensure!(auction.is_some(), "Auction does not exist");
-			let mut auction = auction.unwrap();
-			ensure!(auction.status == AuctionStatus::PendingStart, 
-				"Auction is already started or over.");
-			
-			// ensure only owner can call this
-			ensure!(auction.owner == sender, "Only owner can call this fn.");
-
-			// set moments into storage
-			if start_at.is_some() {
-				auction.start_at = start_at;
-			}
-			if stop_at.is_some() {
-				auction.stop_at = stop_at;
-			}
-			if wait_period.is_some() {
-				auction.wait_period = wait_period;
-			}
-
-			// save to storage
-			<Auctions<T>>::insert(auction_id, auction);
-
-			// ensure this auction in pending queue, once owner call this fn.
-			Self::add2pendings(auction_id);
-				
-			Ok(())
+			Self::do_setup_moments(&sender, auction_id, start_at, stop_at, wait_period)
 		}
 
 		// Owner can pause the auction when it is in active.
 		// add by sunhao 20191024
+		// separated by Tang 20191024
 		pub fn pause_auction(origin, auction_id: T::AuctionId) -> Result {
 			let sender = ensure_signed(origin)?;
 
-			// unwrap auction and ensure its status is Active
-			let auction = Self::auctions(auction_id);
-			ensure!(auction.is_some(), "Auction does not exist");
-			let mut auction = auction.unwrap();
-			ensure!(auction.status == AuctionStatus::Active, 
-				"Auction can NOT be paused now.");
-			
-			// ensure only owner can call this
-			ensure!(auction.owner == sender, "Only owner can call this fn.");
-
-			// change status of auction
-			auction.status = AuctionStatus::Paused;
-
-			// save to storage
-			<Auctions<T>>::insert(auction_id, auction);
-
-			// emit event
-			Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
-				AuctionStatus::Active, AuctionStatus::Paused));
-
-			Ok(())
+			Self::do_pause_auction(&sender, auction_id)
 		}
 
 		// Owner can resume the auction paused before.
 		// add by sunhao 20191024
+		// separated by Tang 20191024
 		pub fn resume_auction(origin, auction_id: T::AuctionId) -> Result {
 			let sender = ensure_signed(origin)?;
 
-			// unwrap auction and ensure its status is Paused
-			let auction = Self::auctions(auction_id);
-			ensure!(auction.is_some(), "Auction does not exist");
-			let mut auction = auction.unwrap();
-			ensure!(auction.status == AuctionStatus::Paused, 
-				"Auction can NOT be resumed now.");
-			
-			// ensure only owner can call this
-			ensure!(auction.owner == sender, "Only owner can call this fn.");
-
-			// change status of auction
-			auction.status = AuctionStatus::Active;
-
-			// save to storage
-			<Auctions<T>>::insert(auction_id, auction);
-
-			// emit event
-			Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
-				AuctionStatus::Paused, AuctionStatus::Active));
-
-			Ok(())
+			Self::do_resume_auction(&sender, auction_id)
 		}
 
 		// owner can stop an active or paused auction by his will.
 		// add by sunhao 20191024
 		pub fn stop_auction(
 			origin,
-			auction_id: T::AuctionId //,
-			// signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
+			auction_id: T::AuctionId
 		) -> Result {
 			let sender = ensure_signed(origin)?;
 
-			// unwrap auction and ensure its status is not stopped yet.
-			let auction = Self::auctions(auction_id);
-			ensure!(auction.is_some(), "Auction does not exist");
-			let mut auction = auction.unwrap();
-			ensure!(auction.status != AuctionStatus::Stopped,
-				"Auction can NOT be stopped now.");
-			
-			// ensure only owner can call this
-			ensure!(auction.owner == sender, "Only owner can call this fn.");
-
-			Self::do_stop_auction(&mut auction)
-
+			Self::do_stop_auction(&sender, auction_id)
 		}
 
 		pub fn participate_auction(
 			origin,
-			auction: T::AuctionId,
+			auction_id: T::AuctionId,
 			price: BalanceOf<T>
 		) -> Result {
+			let participant = ensure_signed(origin)?;
+
+			// unwrap auction and ensure its status is Active
+			let auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::Active), None)?;
+
+			match auction.latest_participate {
+					Some((_account, _moment)) => { // 已经有用户出价
+							let bid_price = <AuctionBids<T>>::get(auction.id, _account);
+							ensure!(price > bid_price + auction.minimum_step, "Increment of bid price less than minimum step ");
+					},
+					_ => {}, // 尚无用户出价
+			};
+
+			let mut delta_price = price;
+			if <AuctionBids<T>>::exists(auction.id, &participant) { // 已经参与过的用户再次出价
+				let prev_bid = <AuctionBids<T>>::get(auction.id, &participant);
+				delta_price = price - prev_bid;
+			}
+
+			ensure!(delta_price < T::Currency::free_balance(&participant), "No enough balance to lock");
+
+			Self::do_lock_balance(&participant, price)?;
+			Self::do_participate_auction(&auction_id, &participant, price)?;
+			
+			// emit event
+			Self::deposit_event(RawEvent::BidderUpdated(auction_id, 
+				participant, price, 0));
 			Ok(())
 		}
+
+		// No need [commented by Tang]
+		// //query one auction with auctionId
+		// pub fn query_one_auction(
+		// 	origin,
+		// 	auction: T::AuctionId,
+		// 	) {
+		// 	let sender = ensure_signed(origin)?;
+		// 	Self::do_query_one_auction(auction, sender.clone())?;
+		// }
 
 		// ===== passive method =====
 		// starting auction methods
@@ -290,7 +286,7 @@ decl_module! {
 		fn start_auction_passive(
 			origin,
 			auctions: Vec<T::AuctionId>,
-			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
+			signature: SignatureOf<T>
 		) -> Result {
 			Ok(())
 		}
@@ -300,20 +296,11 @@ decl_module! {
 		fn stop_auction_passive(
 			origin,
 			auctions: Vec<T::AuctionId>,
-			signature: <<T as aura::Trait>::AuthorityId as RuntimeAppPublic>::Signature
+			signature: SignatureOf<T>
 		) -> Result {
 			Ok(())
 		}
 		
-		//query one auction with auctionId
-		pub fn query_one_auction(
-			origin,
-			auction: T::AuctionId,
-			) {
-			let sender = ensure_signed(origin)?;
-			Self::do_query_one_auction(auction, sender.clone())?;
-		}
-
 		// Runs after every block.
 		fn offchain_worker(now: <T as system::Trait>::BlockNumber) {
 			// Only send messages if we are a potential validator.
@@ -331,6 +318,31 @@ impl<T: Trait> Module<T> {
 			return Err("Auction count overflow");
 		}
 		Ok(auction_id)
+	}
+
+	// utility method for ensure auction status
+	// add by Tang 20191024
+	fn _ensure_auction_with_status(
+		auction_id: T::AuctionId,
+		status: Option<AuctionStatus>,
+		owner: Option<&T::AccountId>
+	) -> result::Result<Auction<T>, &'static str> {
+		// unwrap auction and ensure its status
+		let auction = Self::auctions(auction_id);
+		ensure!(auction.is_some(), "Auction does not exist");
+
+		let auction = auction.unwrap();
+		// check status equel
+		if let Some(s) = status {
+			ensure!(auction.status == s, s.error_str());
+		}
+		// check owner or not
+		if let Some(account) = owner {
+			// ensure only owner can call this
+			ensure!(auction.owner == *account, "Only owner can call this fn.");
+		}
+
+		Ok(auction)
 	}
 
 	// add an auction to pending vec, if it is not in there yet.
@@ -367,7 +379,7 @@ impl<T: Trait> Module<T> {
 		}
 	}
 
-	fn insert_auction(owner: &T::AccountId, auction_id: T::AuctionId, auction:Auction<T>) {
+	fn insert_auction(auction_id: T::AuctionId, auction:Auction<T>) {
 		// Create and store kitty
 		<Auctions<T>>::insert(auction_id, auction);
 		<NextAuctionId<T>>::put(auction_id + 1.into());
@@ -394,32 +406,114 @@ impl<T: Trait> Module<T> {
 			wait_period: None,
 			latest_participate: None,
 		};
-		Self::insert_auction(owner, auction_id, new_auction);
+		Self::insert_auction(auction_id, new_auction);
 		Ok(auction_id)
 	}
+
 	fn do_add_item(
-			sender: &T::AccountId, 
-			auction_id: T::AuctionId,
-			item: T::ItemId,//竞拍对象
+		sender: &T::AccountId, 
+		auction_id: T::AuctionId,
+		item: T::ItemId,//竞拍对象
 	) -> Result {
-			// unwrap auction and ensure its status is PendingStart
-			let auction = Self::auctions(auction_id);
-			ensure!(auction.is_some(), "Auction does not exist");
-			let mut auction = auction.unwrap();
-			ensure!(auction.status == AuctionStatus::PendingStart, 
-				"Auction is already started or over.");
-			// ensure only owner can call this
-			ensure!(auction.owner == *sender, "Only owner can call this fn.");
-			// change status of auction
-			auction.item = Some(item);
-			<Auctions<T>>::insert(auction_id, auction);
-			Ok(())
+		// unwrap auction and ensure its status is PendingStart
+		let mut auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::PendingStart), Some(sender))?;
+
+		// change status of auction
+		auction.item = Some(item);
+		<Auctions<T>>::insert(auction_id, auction);
+
+		Ok(())
 	}
+
+	// real work for do_setup_moments.
+	// separated by Tang 20191024
+	fn do_setup_moments(
+		owner: &T::AccountId,
+		auction_id: T::AuctionId,
+		start_at: Option<T::Moment>,  //起拍时间
+		stop_at: Option<T::Moment>,  //结束时间
+		wait_period: Option<T::Moment>  //竞价等待时间
+	) -> Result {
+		// unwrap auction and ensure its status is PendingStart
+		let mut auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::PendingStart), Some(owner))?;
+
+		// set moments into storage
+		if start_at.is_some() {
+			auction.start_at = start_at;
+		}
+		if stop_at.is_some() {
+			auction.stop_at = stop_at;
+		}
+		if wait_period.is_some() {
+			auction.wait_period = wait_period;
+		}
+
+		// save to storage
+		<Auctions<T>>::insert(auction_id, auction);
+
+		// ensure this auction in pending queue, once owner call this fn.
+		Self::add2pendings(auction_id);
+			
+		Ok(())
+	}
+
+	// real work for do_pause_auction
+	// separated by Tang 20191024
+	fn do_pause_auction(
+		owner: &T::AccountId,
+		auction_id: T::AuctionId
+	) -> Result {
+		// unwrap auction and ensure its status is Active
+		let mut auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::Active), Some(owner))?;
+
+		// change status of auction
+		auction.status = AuctionStatus::Paused;
+
+		// save to storage
+		<Auctions<T>>::insert(auction_id, auction);
+
+		// emit event
+		Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
+			AuctionStatus::Active, AuctionStatus::Paused));
+
+		Ok(())
+	}
+
+	// real work for do_resume_auction
+	// separated by Tang 20191024
+	fn do_resume_auction(
+		owner: &T::AccountId,
+		auction_id: T::AuctionId
+	) -> Result {
+		// unwrap auction and ensure its status is Paused
+		let mut auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::Paused), Some(owner))?;
+
+		// change status of auction
+		auction.status = AuctionStatus::Active;
+
+		// save to storage
+		<Auctions<T>>::insert(auction_id, auction);
+
+		// emit event
+		Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
+			AuctionStatus::Paused, AuctionStatus::Active));
+
+		Ok(())
+	}
+
 	// real work for stopping a auction.
 	// added by sunhao 20191024
-	fn do_stop_auction(auction: &mut Auction<T>) -> Result {
+	// modified by Tang 20191024
+	fn do_stop_auction(
+		owner: &T::AccountId,
+		auction_id: T::AuctionId
+	) -> Result {
+		// unwrap auction and ensure its status is not stopped yet.
+		let mut auction = Self::_ensure_auction_with_status(auction_id, None, Some(owner))?;
 
-		let auction_id = auction.id;
+		ensure!(auction.status != AuctionStatus::Stopped,
+			"Auction can NOT be stopped now.");
+
 		// call settle func if needed.
 		if auction.status != AuctionStatus::PendingStart {
 			Self::do_settle_auction(auction_id)?;
@@ -443,6 +537,46 @@ impl<T: Trait> Module<T> {
 	}
 
 	fn do_settle_auction(auction: T::AuctionId) -> Result {
+		// TODO auction done stuffs
+		Ok(())
+	}
+
+	fn do_lock_balance(account: &T::AccountId, price: BalanceOf<T>) -> Result {
+		T::Currency::extend_lock(
+				AUCTION_ID,
+				account,
+				price,
+				<T as system::Trait>::BlockNumber::max_value(),
+				WithdrawReasons::none());
+		Ok(())
+	}
+
+	fn do_participate_auction(auction: &T::AuctionId, account: &T::AccountId, price: BalanceOf<T>) -> Result {
+		<Auctions<T>>::mutate(auction, |a|{
+				if let Some(auc) = a {
+					auc.latest_participate = Option::Some((account.clone(), <aura::Module<T>>::last()));
+				}
+			});
+
+		<AuctionBids<T>>::insert(
+			auction,
+			account,
+			&price
+		);
+
+		let mut participants;
+		if let Some(p) = Self::auction_participants(auction) {
+			participants = p;
+		} else {
+			participants = Vec::<T::AccountId>::new();
+		}
+
+		if ! participants.contains(account) {
+			participants.push(account.clone());
+		}
+
+		<AuctionParticipants<T>>::insert(auction, participants);
+
 		Ok(())
 	}
 
@@ -472,7 +606,7 @@ impl<T: Trait> Module<T> {
 			})
 			.collect();
 		// only start matched
-		match Self::send_auction_start_tx(starting_auction_ids) {
+		match Self::_send_auction_start_tx(starting_auction_ids) {
 			Ok(_) => {},
 			Err(err) => print(err),
 		}
@@ -510,17 +644,33 @@ impl<T: Trait> Module<T> {
 			})
 			.collect();
 		// only stop matched
-		match Self::send_auction_stop_tx(stoping_auction_ids) {
+		match Self::_send_auction_stop_tx(stoping_auction_ids) {
 			Ok(_) => {},
 			Err(err) => print(err),
 		}
+	}
+
+	fn _send_auction_start_tx(
+		auction_ids: Vec<T::AuctionId>
+	) -> result::Result<(), OffchainErr> {
+		let signature = Self::_sign_unchecked_payload(&auction_ids.encode())?;
+		let call = Call::<T>::start_auction_passive(auction_ids, signature);
+		// TODO
+		Ok(())
+	}
+
+	fn _send_auction_stop_tx(
+		auction_ids: Vec<T::AuctionId>
+	) -> result::Result<(), OffchainErr> {
+		// TODO
+		Ok(())
 	}
 
 	/// Returns own authority identifier iff it is part of the current authority
 	/// set, otherwise this function returns None. The restriction might be
 	/// softened in the future in case a consumer needs to learn own authority
 	/// identifier.
-	fn authority_id() -> Option<T::AuthorityId> {
+	fn _authority_id() -> Option<T::AuthorityId> {
 		let authorities = <aura::Module<T>>::authorities();
 
 		let local_keys = T::AuthorityId::all();
@@ -534,43 +684,44 @@ impl<T: Trait> Module<T> {
 		})
 	}
 
-	fn send_auction_start_tx(auction_ids: Vec<T::AuctionId>) -> Result {
-		// TODO
-		Ok(())
-	}
-
-	fn send_auction_stop_tx(auction_ids: Vec<T::AuctionId>) -> Result {
-		// TODO
-		Ok(())
-	}
-	
-	fn do_query_one_auction(
-		auction: T::AuctionId,
-		sender: T::AccountId
-	) -> result::Result<DetailAuction<T>, &'static str> {
-		let one_auction = Self::auctions(auction);
-		let sender_bid = Self::auction_bids(auction, sender.clone());
-		let account_ids = Self::action_participants(auction).unwrap();
-		let mut is_bool: bool = false;
-
-		ensure!(one_auction.is_some(), "One invalid auction");
-
-		let detail_auction :DetailAuction<T>;
-		if let Some(auction) = one_auction{
-			for i in &account_ids {
-				if let i = sender.clone() {
-					is_bool = true;
-				}
-			}
-			detail_auction = DetailAuction {
-				auction: auction,
-				is_participate: is_bool,
-				participate_price: sender_bid,
-			};
-			return Ok(detail_auction);
+	/// Sign for unchecked transaction
+	fn _sign_unchecked_payload(payload: &Vec<u8>) -> result::Result<SignatureOf<T>, OffchainErr> {
+		let key = Self::_authority_id();
+		if key.is_none() {
+			return Err(OffchainErr::MissingKey);
 		}
-		Err("query fail")
+		let sig = key.unwrap().sign(payload).ok_or(OffchainErr::FailedSigning)?;
+		Ok(sig)
 	}
+
+	// No need [commented by Tang]
+	// fn do_query_one_auction(
+	// 	auction: T::AuctionId,
+	// 	sender: T::AccountId
+	// ) -> result::Result<DetailAuction<T>, &'static str> {
+	// 	let one_auction = Self::auctions(auction);
+	// 	let sender_bid = Self::auction_bids(auction, sender.clone());
+	// 	let account_ids = Self::auction_participants(auction).unwrap();
+	// 	let mut is_bool: bool = false;
+	// 
+	// 	ensure!(one_auction.is_some(), "One invalid auction");
+	// 
+	// 	let detail_auction :DetailAuction<T>;
+	// 	if let Some(auction) = one_auction{
+	// 		for i in &account_ids {
+	// 			if let i = sender.clone() {
+	// 				is_bool = true;
+	// 			}
+	// 		}
+	// 		detail_auction = DetailAuction {
+	// 			auction: auction,
+	// 			is_participate: is_bool,
+	// 			participate_price: sender_bid,
+	// 		};
+	// 		return Ok(detail_auction);
+	// 	}
+	// 	Err("query fail")
+	// }
 }
 
 impl<T: Trait> support::unsigned::ValidateUnsigned for Module<T> {
