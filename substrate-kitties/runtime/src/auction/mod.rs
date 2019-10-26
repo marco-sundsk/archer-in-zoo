@@ -1,8 +1,8 @@
 use sr_primitives::{RuntimeAppPublic, RuntimeDebug};
 use sr_primitives::traits::{
-	SimpleArithmetic, Member, Bounded, One, Zero,
+	SimpleArithmetic, Member, Bounded, Zero, One,
 	Printable,
-	CheckedAdd, CheckedSub, Saturating, SaturatedConversion,
+	CheckedAdd, CheckedSub,
 };
 use sr_primitives::transaction_validity::{
 	TransactionValidity, TransactionLongevity, ValidTransaction, InvalidTransaction,
@@ -10,14 +10,14 @@ use sr_primitives::transaction_validity::{
 use rstd::result;
 use support::dispatch::Result;
 use support::{
-	decl_module, decl_storage, decl_event, Parameter, ensure, print,
+	decl_module, decl_storage, decl_event, Parameter, ensure, print, debug,
 	traits::{
-		LockIdentifier, WithdrawReasons,
-		LockableCurrency, Currency,
+		LockIdentifier, WithdrawReasons, WithdrawReason,
+		LockableCurrency, Currency, ExistenceRequirement,
 		OnUnbalanced,
 	}
 };
-use system::ensure_signed;
+use system::{ensure_none, ensure_signed};
 use system::offchain::SubmitUnsignedTransaction;
 use codec::{Encode, Decode};
 use rstd::vec::Vec;
@@ -130,6 +130,12 @@ pub struct Auction<T> where T: Trait {
 // 	participate_price: BalanceOf<T>,//参与的最新出价
 // }
 
+// helper enum for auction_ids vec
+enum StoreVecs {
+	PendingVec,
+	ActiveVec
+}
+
 // This module's storage items.
 decl_storage! {
 	trait Store for Module<T: Trait> as Auction {
@@ -235,7 +241,9 @@ decl_module! {
 		) -> Result {
 			let sender = ensure_signed(origin)?;
 
-			Self::do_stop_auction(&sender, auction_id)
+			Self::do_stop_auction(&sender, auction_id)?;
+			
+			Ok(())
 		}
 
 		pub fn participate_auction(
@@ -267,9 +275,6 @@ decl_module! {
 			Self::do_lock_balance(&auction_id, &participant, delta_price)?;
 			Self::do_participate_auction(&auction_id, &participant, price)?;
 			
-			// emit event
-			Self::deposit_event(RawEvent::BidderUpdated(auction_id, 
-				participant, price, 0));
 			Ok(())
 		}
 
@@ -286,26 +291,81 @@ decl_module! {
 		// ===== passive method =====
 		// starting auction methods
 		// Called by offchain worker
-		fn start_auction_passive(
+		fn start_auctions_passive(
 			origin,
-			auctions: Vec<T::AuctionId>,
+			auction_ids: Vec<T::AuctionId>,
 			signature: SignatureOf<T>
 		) -> Result {
-			Ok(())
+			ensure_none(origin)?;
+			// ensure status
+			ensure!(Self::is_auctions_with_status(&auction_ids, AuctionStatus::PendingStart, false), "auctions should be pending start");
+
+			// key validating
+			if let Some(key) = Self::authority_id() {
+				let signature_valid = auction_ids.using_encoded(|encoded_auction_ids| {
+					key.verify(&encoded_auction_ids, &signature)
+				});
+				ensure!(signature_valid, "Invalid signature.");
+
+				// set status as active
+				auction_ids.iter().for_each(|auction_id| {
+					Self::_change_auction_status(*auction_id, AuctionStatus::PendingStart, AuctionStatus::Active);
+				});
+				// remove auction_ids from pendings
+				Self::remove_all_from_set(StoreVecs::PendingVec, &auction_ids);
+				// add auction_ids to active_auctions
+				Self::add_all_to_set(StoreVecs::ActiveVec, &auction_ids);
+
+				Ok(())
+			} else {
+				Err("Non existent public key.")?
+			}
 		}
 
 		// stoping auction methods
 		// Called by offchain worker
-		fn stop_auction_passive(
+		fn stop_auctions_passive(
 			origin,
-			auctions: Vec<T::AuctionId>,
+			auction_ids: Vec<T::AuctionId>,
 			signature: SignatureOf<T>
 		) -> Result {
-			Ok(())
+			ensure_none(origin)?;
+			// ensure status
+			ensure!(Self::is_auctions_with_status(&auction_ids, AuctionStatus::Stopped, true), "auctions should be non stopped");
+
+			// key validating
+			if let Some(key) = Self::authority_id() {
+				let signature_valid = auction_ids.using_encoded(|encoded_auction_ids| {
+					key.verify(&encoded_auction_ids, &signature)
+				});
+				ensure!(signature_valid, "Invalid signature.");
+
+				// set status as active
+				auction_ids.iter().for_each(|auction_id| {
+					if let Some(auction) = Self::auctions(auction_id) {
+						// call settle func if needed.
+						if auction.status != AuctionStatus::PendingStart {
+							match Self::do_settle_auction(&auction) {
+								Err(_) => {}, // DO SOMETHING?
+								Ok(_) => {},
+							}
+						}
+						Self::_change_auction_status(*auction_id, auction.status, AuctionStatus::Stopped);
+					}
+				});
+				// remove auction_ids from active_auctions
+				Self::remove_all_from_set(StoreVecs::ActiveVec, &auction_ids);
+
+				Ok(())
+			} else {
+				Err("Non existent public key.")?
+			}
 		}
 		
 		// Runs after every block.
 		fn offchain_worker(now: <T as system::Trait>::BlockNumber) {
+			debug::RuntimeLogger::init();
+
 			// Only send messages if we are a potential validator.
 			if runtime_io::is_validator() {
 				Self::offchain(now);
@@ -315,6 +375,43 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
+	// ====== exported public methods ======
+	/// Returns own authority identifier iff it is part of the current authority
+	/// set, otherwise this function returns None. The restriction might be
+	/// softened in the future in case a consumer needs to learn own authority
+	/// identifier.
+	pub fn authority_id() -> Option<T::AuthorityId> {
+		let authorities = <aura::Module<T>>::authorities();
+
+		let local_keys = T::AuthorityId::all();
+
+		authorities.into_iter().find_map(|authority| {
+			if local_keys.contains(&authority) {
+				Some(authority)
+			} else {
+				None
+			}
+		})
+	}
+	pub fn is_auctions_with_status (
+		auction_ids: &Vec<T::AuctionId>,
+		status: AuctionStatus,
+		not_equal: bool
+	) -> bool {
+		auction_ids.iter().all(|&auction_id| {
+			if let Some(auction) = Self::auctions(auction_id) {
+				if not_equal {
+					auction.status != status
+				} else {
+					auction.status == status
+				}
+			} else {
+				false
+			}
+		})
+	}
+
+	// ====== module private methods ======
 	fn get_next_auction_id() -> result::Result<T::AuctionId, &'static str> {
 		let auction_id = Self::next_auction_id();
 		if auction_id == T::AuctionId::max_value() {
@@ -348,38 +445,52 @@ impl<T: Trait> Module<T> {
 		Ok(auction)
 	}
 
-	// add an auction to pending vec, if it is not in there yet.
-	// add by sunhao 20191024
-	fn add2pendings(auction_id: T::AuctionId) {
-		let mut pending_auctions = Self::pending_auctions();
-		let mut flag = false;
-		for elem in pending_auctions.iter() {
-			if *elem == auction_id {
-				flag = true;
-				break;
+	/// add auction ids to a store vec set.
+	/// add by sunhao 20191024
+	/// modified by Tang 20191025
+	fn add_all_to_set(vec_type: StoreVecs, auction_ids: &Vec<T::AuctionId>) {
+		let mut stored_auction_ids = match vec_type {
+			StoreVecs::PendingVec => Self::pending_auctions(),
+			StoreVecs::ActiveVec => Self::active_auctions(),
+		};
+		// add to set
+		for auction_id in auction_ids.iter() {
+			let exists = stored_auction_ids.iter().all(|auc_id| auc_id != auction_id);
+			if !exists {
+				stored_auction_ids.push(*auction_id);
 			}
 		}
-		if !flag {
-			pending_auctions.push(auction_id);
-			<PendingAuctions<T>>::put(pending_auctions);
-		}
+		// save to store
+		match vec_type {
+			StoreVecs::PendingVec => <PendingAuctions<T>>::put(stored_auction_ids),
+			StoreVecs::ActiveVec => <ActiveAuctions<T>>::put(stored_auction_ids),
+		};
 	}
 
-	// remove an auction from active vec.
-	// add by sunhao 20191024
-	fn remove_from_active(auction_id: T::AuctionId) {
-		let mut active_auctions = Self::active_auctions();
-		let mut index = active_auctions.len();
-		for (i, elem) in active_auctions.iter().enumerate() {
-			if *elem == auction_id {
-				index = i;
-				break;
-			}
+	/// remove an auction from a store vec set.
+	/// add by sunhao 20191024
+	/// modified by Tang 20191025
+	fn remove_all_from_set(vec_type: StoreVecs, auction_ids: &Vec<T::AuctionId>) {
+		let mut stored_auction_ids = match vec_type {
+			StoreVecs::PendingVec => Self::pending_auctions(),
+			StoreVecs::ActiveVec => Self::active_auctions(),
+		};
+		// remove from set
+		for auction_id in auction_ids.iter() {
+			stored_auction_ids = stored_auction_ids.iter()
+				.filter_map(|auc_id| if auc_id == auction_id {
+					None
+				} else {
+					Some(*auc_id)
+				})
+				.collect();
 		}
-		if index != active_auctions.len() {
-			active_auctions.remove(index);
-			<ActiveAuctions<T>>::put(active_auctions);
-		}
+		
+		// save to store
+		match vec_type {
+			StoreVecs::PendingVec => <PendingAuctions<T>>::put(stored_auction_ids),
+			StoreVecs::ActiveVec => <ActiveAuctions<T>>::put(stored_auction_ids),
+		};
 	}
 
 	fn insert_auction(auction_id: T::AuctionId, auction:Auction<T>) {
@@ -455,53 +566,56 @@ impl<T: Trait> Module<T> {
 		<Auctions<T>>::insert(auction_id, auction);
 
 		// ensure this auction in pending queue, once owner call this fn.
-		Self::add2pendings(auction_id);
+		Self::add_all_to_set(StoreVecs::PendingVec,  &vec![auction_id]);
 			
 		Ok(())
 	}
 
 	// real work for do_pause_auction
-	// separated by Tang 20191024
+	// modified by Tang 20191025
 	fn do_pause_auction(
 		owner: &T::AccountId,
 		auction_id: T::AuctionId
 	) -> Result {
 		// unwrap auction and ensure its status is Active
-		let mut auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::Active), Some(owner))?;
+		let auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::Active), Some(owner))?;
 
 		// change status of auction
-		auction.status = AuctionStatus::Paused;
-
-		// save to storage
-		<Auctions<T>>::insert(auction_id, auction);
-
-		// emit event
-		Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
-			AuctionStatus::Active, AuctionStatus::Paused));
+		Self::_change_auction_status(auction_id, auction.status, AuctionStatus::Paused);
 
 		Ok(())
 	}
 
 	// real work for do_resume_auction
 	// separated by Tang 20191024
+	// modified by Tang 20191025
 	fn do_resume_auction(
 		owner: &T::AccountId,
 		auction_id: T::AuctionId
 	) -> Result {
 		// unwrap auction and ensure its status is Paused
-		let mut auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::Paused), Some(owner))?;
+		let auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::Paused), Some(owner))?;
 
 		// change status of auction
-		auction.status = AuctionStatus::Active;
-
-		// save to storage
-		<Auctions<T>>::insert(auction_id, auction);
-
-		// emit event
-		Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
-			AuctionStatus::Paused, AuctionStatus::Active));
+		Self::_change_auction_status(auction_id, auction.status, AuctionStatus::Active);
 
 		Ok(())
+	}
+
+	// storage work for auction status
+	// added by Tang 20191025
+	fn _change_auction_status(
+		auction_id: T::AuctionId,
+		old_status: AuctionStatus,
+		new_status: AuctionStatus,
+	) {
+		<Auctions<T>>::mutate(auction_id, |auc| {
+			if let Some(auction) = auc {
+				auction.status = new_status;
+			}
+		});
+		// emit event
+		Self::deposit_event(RawEvent::AuctionUpdated(auction_id, old_status, new_status));
 	}
 
 	// real work for stopping a auction.
@@ -512,31 +626,70 @@ impl<T: Trait> Module<T> {
 		auction_id: T::AuctionId
 	) -> Result {
 		// unwrap auction and ensure its status is not stopped yet.
-		let mut auction = Self::_ensure_auction_with_status(auction_id, None, Some(owner))?;
+		let auction = Self::_ensure_auction_with_status(auction_id, None, Some(owner))?;
 
 		ensure!(auction.status != AuctionStatus::Stopped,
 			"Auction can NOT be stopped now.");
 
 		// call settle func if needed.
 		if auction.status != AuctionStatus::PendingStart {
-			Self::do_settle_auction(auction_id)?;
+			Self::do_settle_auction(&auction)?;
 		}
 
 		// change status of auction
-		let old_status = auction.status;
-		auction.status = AuctionStatus::Stopped;
-
-		// save to storage
-		<Auctions<T>>::insert(auction_id, auction);
-
+		Self::_change_auction_status(auction_id, auction.status, AuctionStatus::Stopped);
+		
 		// remove from active vecs
-		Self::remove_from_active(auction_id);
-		
-		// emit event
-		Self::deposit_event(RawEvent::AuctionUpdated(auction_id, 
-			old_status, AuctionStatus::Stopped));
-		
+		Self::remove_all_from_set(StoreVecs::ActiveVec, &vec![auction_id]);
+
 		Ok(())
+	}
+
+	fn do_settle_auction(auction: &Auction<T>) -> Result {
+		// unlock all participents' balance
+		if let Some(participants) = <AuctionParticipants<T>>::get(auction.id) {
+			participants.iter().try_for_each(|account| {
+				Self::do_unlock_balance(&auction.id, account)
+			})?;
+		}
+
+		// handle winner
+		let owner = &auction.owner;
+		// transfer auction item to winner
+		if let Some(item_id) = auction.item {
+			if let Some((winner, _)) = &auction.latest_participate {
+				let winner_bid = <AuctionBids<T>>::get(&auction.id, winner);
+				let (tranfer_value, fee) = Self::_calc_auctino_fee(winner_bid);
+
+				// FIXME: first ensure then modify store
+				// withdraw imbalance
+				let fee_imbalance = T::Currency::withdraw(
+					winner,
+					fee,
+					WithdrawReason::Fee,
+					ExistenceRequirement::KeepAlive
+				)?;
+				// transfer auction balance
+				T::Currency::transfer(winner, owner, tranfer_value)?;
+
+				// try transfer item
+				T::AuctionTransfer::transfer_item(owner, winner, item_id)?;
+
+				// trigger imbalance interface
+				T::OnAuctionPayment::on_unbalanced(fee_imbalance);
+			}
+		}
+
+		Ok(())
+	}
+
+	/// FIXME using configable ratio
+	/// return transfer value and fee
+	fn _calc_auctino_fee (
+		price: BalanceOf<T>
+	) -> (BalanceOf<T>, BalanceOf<T>) {
+		let fee = (price / 20.into()).min(One::one());
+		(price - fee, fee)
 	}
 
 	fn do_lock_balance(auction: &T::AuctionId, account: &T::AccountId, balance: BalanceOf<T>) -> Result {
@@ -545,14 +698,14 @@ impl<T: Trait> Module<T> {
 		// 增加全局锁仓
 		let mut global_lock = balance;
 		if <AccountLocks<T>>::exists(account) {
-			global_lock += Self::account_locks(account)
+			global_lock = global_lock.checked_add(&Self::account_locks(account)).ok_or("balance add overflow")?;
 		}
 		<AccountLocks<T>>::insert(account, global_lock);
 		
 		// 增加auction下锁仓
 		let mut auction_lock = balance;
 		if <AuctionBids<T>>::exists(auction, account) {
-			auction_lock += Self::auction_bids(auction, account);
+			auction_lock = auction_lock.checked_add(&Self::auction_bids(auction, account)).ok_or("balance add overflow")?;
 		}
 		<AuctionBids<T>>::insert(auction, account, auction_lock);
 
@@ -579,8 +732,9 @@ impl<T: Trait> Module<T> {
 			let mut global_lock = Self::account_locks(account);
 			ensure!(global_lock >= auction_lock, "fatal error, global lock less than auction lock");
 			
-			<AuctionBids<T>>::remove(auction, account);
-			global_lock -= auction_lock;
+			// [No need remove, (commented by Tang)]
+			// <AuctionBids<T>>::remove(auction, account);
+			global_lock = global_lock.checked_sub(&auction_lock).ok_or("balance sub overflow")?;
 			// 调用锁仓接口
 			if global_lock == Zero::zero() {
 				<AccountLocks<T>>::remove(account);
@@ -598,30 +752,28 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	fn do_settle_auction(auction: T::AuctionId) -> Result {
-		// TODO auction done stuffs
-		Ok(())
-	}
-
-	fn do_participate_auction(auction: &T::AuctionId, account: &T::AccountId, price: BalanceOf<T>) -> Result {
-		<Auctions<T>>::mutate(auction, |a|{
+	fn do_participate_auction(auction_id: &T::AuctionId, account: &T::AccountId, price: BalanceOf<T>) -> Result {
+		<Auctions<T>>::mutate(auction_id, |a|{
 				if let Some(auc) = a {
 					auc.latest_participate = Option::Some((account.clone(), <aura::Module<T>>::last()));
 				}
 			});
 
 		let mut participants;
-		if let Some(p) = Self::auction_participants(auction) {
+		if let Some(p) = Self::auction_participants(auction_id) {
 			participants = p;
 		} else {
 			participants = Vec::<T::AccountId>::new();
 		}
 
-		if ! participants.contains(account) {
+		if !participants.contains(account) {
 			participants.push(account.clone());
 		}
 
-		<AuctionParticipants<T>>::insert(auction, participants);
+		<AuctionParticipants<T>>::insert(auction_id, participants);
+
+		// emit event
+		Self::deposit_event(RawEvent::BidderUpdated(*auction_id, account.clone(), price, 0));
 
 		Ok(())
 	}
@@ -639,6 +791,10 @@ impl<T: Trait> Module<T> {
 					Some(a) => a,
 					None => return None,
 				};
+				// ensure now is pending start
+				if auction.status != AuctionStatus::PendingStart {
+					return None;
+				}
 				let start_at = match auction.start_at {
 					Some(t) => t,
 					None => return None,
@@ -666,6 +822,10 @@ impl<T: Trait> Module<T> {
 					Some(a) => a,
 					None => return None,
 				};
+				// ensure now auction is not Stopped
+				if auction.status == AuctionStatus::Stopped {
+					return None;
+				}
 				let stop_at = match auction.stop_at {
 					Some(t) => t,
 					None => return None,
@@ -700,39 +860,27 @@ impl<T: Trait> Module<T> {
 		auction_ids: Vec<T::AuctionId>
 	) -> result::Result<(), OffchainErr> {
 		let signature = Self::_sign_unchecked_payload(&auction_ids.encode())?;
-		let call = Call::<T>::start_auction_passive(auction_ids, signature);
-		// TODO
+		let call = Call::<T>::start_auctions_passive(auction_ids, signature);
+		
+		T::SubmitTransaction::submit_unsigned(call)
+			.map_err(|_| OffchainErr::SubmitTransaction)?;
 		Ok(())
 	}
 
 	fn _send_auction_stop_tx(
 		auction_ids: Vec<T::AuctionId>
 	) -> result::Result<(), OffchainErr> {
-		// TODO
+		let signature = Self::_sign_unchecked_payload(&auction_ids.encode())?;
+		let call = Call::<T>::stop_auctions_passive(auction_ids, signature);
+		
+		T::SubmitTransaction::submit_unsigned(call)
+			.map_err(|_| OffchainErr::SubmitTransaction)?;
 		Ok(())
-	}
-
-	/// Returns own authority identifier iff it is part of the current authority
-	/// set, otherwise this function returns None. The restriction might be
-	/// softened in the future in case a consumer needs to learn own authority
-	/// identifier.
-	fn _authority_id() -> Option<T::AuthorityId> {
-		let authorities = <aura::Module<T>>::authorities();
-
-		let local_keys = T::AuthorityId::all();
-
-		authorities.into_iter().find_map(|authority| {
-			if local_keys.contains(&authority) {
-				Some(authority)
-			} else {
-				None
-			}
-		})
 	}
 
 	/// Sign for unchecked transaction
 	fn _sign_unchecked_payload(payload: &Vec<u8>) -> result::Result<SignatureOf<T>, OffchainErr> {
-		let key = Self::_authority_id();
+		let key = Self::authority_id();
 		if key.is_none() {
 			return Err(OffchainErr::MissingKey);
 		}
@@ -774,7 +922,58 @@ impl<T: Trait> support::unsigned::ValidateUnsigned for Module<T> {
 	type Call = Call<T>;
 
 	fn validate_unsigned(call: &Self::Call) -> TransactionValidity {
-		// TODO
-		InvalidTransaction::Call.into()
+		// verify that the incoming (unverified) pubkey is actually an authority id
+		let authority_id = match <Module<T>>::authority_id() {
+			Some(id) => id,
+			None => return InvalidTransaction::BadProof.into(),
+		};
+
+		if let Call::start_auctions_passive(auction_ids, signature) = call {
+			if !<Module<T>>::is_auctions_with_status(&auction_ids, AuctionStatus::PendingStart, false) {
+				// all auction ids should be pending start
+				return InvalidTransaction::Stale.into();
+			}
+			
+			// check signature (this is expensive so we do it last).
+			let signature_valid = auction_ids.using_encoded(|encoded_auction_ids| {
+				authority_id.verify(&encoded_auction_ids, &signature)
+			});
+
+			if !signature_valid {
+				return InvalidTransaction::BadProof.into();
+			}
+
+			Ok(ValidTransaction {
+				priority: 0,
+				requires: vec![],
+				provides: vec![(auction_ids, authority_id).encode()],
+				longevity: TransactionLongevity::max_value(),
+				propagate: true,
+			})
+		} else if let Call::stop_auctions_passive(auction_ids, signature) = call {			
+			if !<Module<T>>::is_auctions_with_status(&auction_ids, AuctionStatus::Stopped, true) {
+				// all auction ids should be active start
+				return InvalidTransaction::Stale.into();
+			}
+
+			// check signature (this is expensive so we do it last).
+			let signature_valid = auction_ids.using_encoded(|encoded_auction_ids| {
+				authority_id.verify(&encoded_auction_ids, &signature)
+			});
+
+			if !signature_valid {
+				return InvalidTransaction::BadProof.into();
+			}
+
+			Ok(ValidTransaction {
+				priority: 0,
+				requires: vec![],
+				provides: vec![(auction_ids, authority_id).encode()],
+				longevity: TransactionLongevity::max_value(),
+				propagate: true,
+			})
+		} else {
+			InvalidTransaction::Call.into()
+		}
 	}
 }
