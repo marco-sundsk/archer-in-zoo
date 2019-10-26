@@ -848,10 +848,17 @@ impl<T: Trait> Module<T> {
 					None => return None,
 				};
 				// get last participate price
-				if let Some((account_id, _)) = auction.latest_participate {
+				if let Some((account_id, last_moment)) = auction.latest_participate {
 					let last_price = <AuctionBids<T>>::get(&auction.id, account_id);
+					// price end condition
 					if last_price >= upper_bound_price {
 						return Some(auction.id);
+					}
+					// period end condition
+					if let Some(wait_period) = auction.wait_period {
+						if last_timestamp - last_moment > wait_period {
+							return Some(auction.id);
+						}
 					}
 				}
 				None
