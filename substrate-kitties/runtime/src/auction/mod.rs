@@ -25,8 +25,8 @@ use system::offchain::SubmitUnsignedTransaction;
 use crate::traits::ItemTransfer;
 
 // Tests part
-// mod mocks;
-// mod tests;
+mod mocks;
+mod tests;
 
 const AUCTION_ID: LockIdentifier = *b"auction ";
 
