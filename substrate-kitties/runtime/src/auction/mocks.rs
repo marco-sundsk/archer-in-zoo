@@ -1,6 +1,6 @@
 //! Test utilities
 #![cfg(test)]
-
+mod mocks{
 use super::*;
 
 use primitives::H256;
@@ -82,3 +82,4 @@ pub type TheModule = Module<Test>;
 	fn new_test_ext() -> runtime_io::TestExternalities {
 		system::GenesisConfig::default().build_storage::<Test>().unwrap().into()
 	}
+}
