@@ -1,3 +1,4 @@
+mod tests;
 use sr_primitives::{RuntimeAppPublic, RuntimeDebug};
 use sr_primitives::traits::{
 	SimpleArithmetic, Member, Bounded, Zero, One,
@@ -22,6 +23,7 @@ use system::offchain::SubmitUnsignedTransaction;
 use codec::{Encode, Decode};
 use rstd::vec::Vec;
 use crate::traits::ItemTransfer;
+use rstd::prelude::*;
 
 const AUCTION_ID: LockIdentifier = *b"auction ";
 

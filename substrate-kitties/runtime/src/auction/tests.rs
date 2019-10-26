@@ -1,7 +1,7 @@
 //! Tests for the module.
 #![cfg(test)]
-
-use mock::*;
+mod mocks{
+// use mock::*;
 use support::{assert_ok};
 
 #[test]
@@ -13,4 +13,5 @@ fn it_works_for_default_value() {
     // asserting that the stored value is equal to what we stored
     assert_eq!(TheModule::something(), Some(42));
   });
+}
 }
