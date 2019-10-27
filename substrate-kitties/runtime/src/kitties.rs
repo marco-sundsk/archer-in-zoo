@@ -125,8 +125,12 @@ impl<T: Trait> Module<T> {
 		Self::insert_owned_kitty(owner, kitty_id);
 	}
 
+	fn is_kitty_owner(who: &T::AccountId, kitty_id: T::KittyIndex) -> bool {
+		<OwnedKitties<T>>::exists(&(who.clone(), Some(kitty_id)))
+	}
+
 	fn transfer_kitty(owner: &T::AccountId, to: &T::AccountId, kitty_id: T::KittyIndex) -> result::Result<(), &'static str> {
-		ensure!(<OwnedKitties<T>>::exists(&(owner.clone(), Some(kitty_id))), "Only owner can transfer kitty");
+		ensure!(Self::is_kitty_owner(owner, kitty_id), "Only owner can transfer kitty");
 
 		Self::do_transfer(owner, to, kitty_id);
 		Self::deposit_event(RawEvent::Transferred(owner.clone(), to.clone(), kitty_id));
@@ -171,7 +175,18 @@ impl<T: Trait> Module<T> {
 }
 
 impl<T: Trait> ItemTransfer<<T as system::Trait>::AccountId, T::KittyIndex> for Module<T> {
-	fn transfer_item(source: &<T as system::Trait>::AccountId, dest: &<T as system::Trait>::AccountId, item_id: T::KittyIndex) -> result::Result<(), &'static str> {
+	fn is_item_owner(
+		who: &<T as system::Trait>::AccountId,
+		item_id: T::KittyIndex
+	) -> bool {
+		Module::<T>::is_kitty_owner(who, item_id)
+	}
+
+	fn transfer_item(
+		source: &<T as system::Trait>::AccountId,
+		dest: &<T as system::Trait>::AccountId,
+		item_id: T::KittyIndex
+	) -> result::Result<(), &'static str> {
 		Module::<T>::transfer_kitty(source, dest, item_id)
 	}
 }

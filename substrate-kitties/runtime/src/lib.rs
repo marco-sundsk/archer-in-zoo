@@ -268,10 +268,12 @@ impl auction::Trait for Runtime {
 }
 
 impl system::offchain::CreateTransaction<Runtime, UncheckedExtrinsic> for Runtime {
+	type Public = <Signature as Verify>::Signer;
 	type Signature = Signature;
 
-	fn create_transaction<F: system::offchain::Signer<AccountId, Self::Signature>>(
+	fn create_transaction<F: system::offchain::Signer<Self::Public, Self::Signature>>(
 		call: Call,
+		public: Self::Public,
 		account: AccountId,
 		index: Index,
 	) -> Option<(Call, <UncheckedExtrinsic as Extrinsic>::SignaturePayload)> {
@@ -286,9 +288,8 @@ impl system::offchain::CreateTransaction<Runtime, UncheckedExtrinsic> for Runtim
 			system::CheckWeight::<Runtime>::new(),
 			transaction_payment::ChargeTransactionPayment::<Runtime>::from(tip)
 		);
-
 		let raw_payload = SignedPayload::new(call, extra).ok()?;
-		let signature = F::sign(account.clone(), &raw_payload)?;
+		let signature = F::sign(public, &raw_payload)?;
 		let address = Indices::unlookup(account);
 		let (call, extra, _) = raw_payload.deconstruct();
 		Some((call, (address, signature, extra)))
@@ -312,7 +313,7 @@ construct_runtime!(
 		// Substrate Kitties module
 		Kitties: kitties::{Module, Storage, Call, Event<T>},
 		// Auction module
-		Auction: auction::{Module, Call, Storage, Event<T>, ValidateUnsigned},
+		Auctions: auction::{Module, Call, Storage, Event<T>, ValidateUnsigned},
 		RandomnessCollectiveFlip: randomness_collective_flip::{Module, Call, Storage},
 	}
 );

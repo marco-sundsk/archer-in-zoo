@@ -1,3 +1,6 @@
+use codec::{Encode, Decode};
+use rstd::prelude::*;
+use rstd::{result, vec::Vec};
 use sr_primitives::{RuntimeAppPublic, RuntimeDebug};
 use sr_primitives::traits::{
 	SimpleArithmetic, Member, Bounded, Zero, One,
@@ -7,7 +10,6 @@ use sr_primitives::traits::{
 use sr_primitives::transaction_validity::{
 	TransactionValidity, TransactionLongevity, ValidTransaction, InvalidTransaction,
 };
-use rstd::result;
 use support::dispatch::Result;
 use support::{
 	decl_module, decl_storage, decl_event, Parameter, ensure, print, debug,
@@ -19,9 +21,12 @@ use support::{
 };
 use system::{ensure_none, ensure_signed};
 use system::offchain::SubmitUnsignedTransaction;
-use codec::{Encode, Decode};
-use rstd::vec::Vec;
+
 use crate::traits::ItemTransfer;
+
+// Tests part
+mod mocks;
+mod tests;
 
 const AUCTION_ID: LockIdentifier = *b"auction ";
 
@@ -138,7 +143,7 @@ enum StoreVecs {
 
 // This module's storage items.
 decl_storage! {
-	trait Store for Module<T: Trait> as Auction {
+	trait Store for Module<T: Trait> as Auctions {
 		NextAuctionId get(fn next_auction_id): T::AuctionId;
 		
 		// 记录账户全局lock的余额数量，不同auction中lock的余额汇总在这里
@@ -529,6 +534,9 @@ impl<T: Trait> Module<T> {
 		auction_id: T::AuctionId,
 		item: T::ItemId,//竞拍对象
 	) -> Result {
+		// ensure item owner
+		ensure!(T::AuctionTransfer::is_item_owner(sender, item), "you should be item's owner.");
+
 		// unwrap auction and ensure its status is PendingStart
 		let mut auction = Self::_ensure_auction_with_status(auction_id, Some(AuctionStatus::PendingStart), Some(sender))?;
 
@@ -840,10 +848,17 @@ impl<T: Trait> Module<T> {
 					None => return None,
 				};
 				// get last participate price
-				if let Some((account_id, _)) = auction.latest_participate {
+				if let Some((account_id, last_moment)) = auction.latest_participate {
 					let last_price = <AuctionBids<T>>::get(&auction.id, account_id);
+					// price end condition
 					if last_price >= upper_bound_price {
 						return Some(auction.id);
+					}
+					// period end condition
+					if let Some(wait_period) = auction.wait_period {
+						if last_timestamp - last_moment > wait_period {
+							return Some(auction.id);
+						}
 					}
 				}
 				None
